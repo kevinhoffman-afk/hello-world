@@ -131,40 +131,31 @@ function paintBackground() {
 }
 
 // ---------- state + input ----------
-let mx, my, rawX, rawY, reach = 0;
-let history = [];
+let rawX, rawY;
 let hasBall = true, cooldown = 0;
 let balls = [], popups = [], sparks = [], flashes = [];
 let makes = 0, shots = 0, streak = 0, netSway = 0, clock = 0;
+// player: pelvis position, facing, how airborne (0 floor .. 1 dunk pose), reach, gait
+let px, py, facing = 1, air = 1, reach = 0, gait = 0, stride = 0, speed = 0, dribble = 0;
+let pose, J, feetY, ballL = [0, 0], heldBall = [0, 0], heldSpin = 0, ballTrail = [];
 
 layout();
-rawX = W * 0.35; rawY = H * 0.4; mx = rawX; my = rawY;
+rawX = W * 0.35; rawY = H * 0.35;
 addEventListener('resize', layout);
 document.fonts && document.fonts.load(`8px ${FONT}`);
 
-function clampHand() {
-  mx = Math.max(3 * u, Math.min(W - R, rawX));
-  my = Math.max(R, Math.min(rawY, floorY - (feetDrop(reach) + 0.1) * u));
-}
-function track(e) {
-  rawX = e.clientX; rawY = e.clientY; clampHand();
-  const now = performance.now();
-  history.push({ x: mx, y: my, t: now });
-  while (history.length && now - history[0].t > 90) history.shift();
-}
+function track(e) { rawX = e.clientX; rawY = e.clientY; }
 function drop() {
   if (!hasBall) return;
   let vx = 0, vy = 0;
-  const now = performance.now();
-  while (history.length && now - history[0].t > 90) history.shift();
-  if (history.length > 1) {
-    const a = history[0], b = history[history.length - 1];
+  if (ballTrail.length > 1) {
+    const a = ballTrail[0], b = ballTrail[ballTrail.length - 1];
     const dt = Math.max((b.t - a.t) / 1000, 0.016);
     vx = (b.x - a.x) / dt; vy = (b.y - a.y) / dt;
     const max = 40 * u, sp = Math.hypot(vx, vy);
     if (sp > max) { vx *= max / sp; vy *= max / sp; }
   }
-  balls.push({ x: mx, y: my, vx, vy, rot: 0, life: 0, fire: streak >= 3 });
+  balls.push({ x: heldBall[0], y: heldBall[1], vx, vy, rot: heldSpin, life: 0, fire: streak >= 3 });
   if (balls.length > 12) balls.shift();
   shots++;
   hasBall = false; cooldown = 0.4;
@@ -177,6 +168,50 @@ c.addEventListener('pointerdown', e => {
 c.addEventListener('pointerup', e => {
   if (e.pointerType !== 'mouse') drop();
 });
+
+// Low cursor: he runs along the floor dribbling. Raise it and he jumps, blending
+// through take-off into the dunk pose with the ball under the cursor.
+function updatePlayer(dt, now) {
+  const tx = Math.max(2 * u, Math.min(W - 2 * u, rawX));
+  const dunk = fk(applyReach({ ...DUNK }, reach));
+  const airY = rawY - dunk.ball[1] * u;                    // pelvis height if flying
+  const standY = floorY - 2.3 * u;
+  air += (clamp01((standY - airY) / (2.2 * u)) - air) * Math.min(1, dt * 10);
+
+  const newX = tx - dunk.ball[0] * u * smooth(air);
+  if (px === undefined) px = newX;
+  speed += ((newX - px) / dt - speed) * Math.min(1, dt * 8);
+  px = newX;
+  stride += (clamp01(Math.abs(speed) / (10 * u)) * (1 - air) - stride) * Math.min(1, dt * 6);
+  gait += dt * Math.abs(speed) / u * 1.7;
+  dribble += dt * (Math.PI * 2 * 1.6 + Math.abs(speed) / u * 0.6);
+  if (air < 0.15 && Math.abs(speed) > 2 * u) facing = Math.sign(speed);
+  if (air > 0.35) facing = 1;
+
+  const ground = runPose(gait, stride, dribble, hasBall);
+  pose = air < 0.35 ? blendPose(ground, TAKEOFF, air / 0.35) : blendPose(TAKEOFF, DUNK, (air - 0.35) / 0.65);
+  applyReach(pose, reach * air);
+  J = fk(pose);
+  const low = footLow(J, pose);
+  py = Math.min(airY, floorY - low * u);                   // feet never go through the floor
+  feetY = py + low * u;
+  const toW = l => [px + facing * l[0] * u, py + l[1] * u];
+
+  // stretch the ball out in front as he closes in on the rim
+  const hw = toW(J.ball);
+  const near = Math.hypot(hw[0] - (rimF + rimB) / 2, hw[1] - (rimY - 1.2 * u));
+  reach += (air * clamp01((8 * u - near) / (5 * u)) - reach) * Math.min(1, dt * 8);
+
+  // on the floor the ball bounces between his hand and the court
+  const dw = 1 - smooth(air / 0.3);
+  const floorL = (floorY - R - py) / u;
+  const bounce = floorL - (floorL - J.ball[1]) * Math.abs(Math.cos(dribble / 2));
+  ballL = [J.ball[0], J.ball[1] + (bounce - J.ball[1]) * dw];
+  heldBall = toW(ballL);
+  heldSpin += dt * speed / R * 0.5;
+  ballTrail.push({ x: heldBall[0], y: heldBall[1], t: now });
+  while (ballTrail.length && now - ballTrail[0].t > 90) ballTrail.shift();
+}
 
 // ---------- physics ----------
 function bounceOffPoint(b, px, py, rad, e) {
@@ -431,31 +466,6 @@ function drawHead(x, y, tilt) {
   ctx.restore();
 }
 
-function drawJersey() {
-  const red = '#d91a2c', redDark = '#a50d22', redHi = '#f2465a';
-  // baggy shorts, flared forward over the driving knee
-  poly([[-1.6, 3.58], [-0.65, 3.62], [-0.3, 4.5], [-0.98, 4.7], [-1.25, 4.42], [-1.95, 4.6]], red, OUT, 0.09);
-  poly([[-1.6, 3.6], [-1.27, 3.62], [-1.27, 4.42], [-1.93, 4.58]], redDark, null);
-  line([[-0.68, 3.68], [-0.36, 4.48]], '#111', 0.11);                // side stripe
-  line([[-0.68, 3.68], [-0.36, 4.48]], '#fff', 0.04);
-  line([[-0.34, 4.48], [-0.97, 4.63]], '#fff', 0.035);               // hem trim
-  line([[-0.95, 3.85], [-0.75, 4.35]], redDark, 0.03);               // folds
-  line([[-1.45, 3.9], [-1.62, 4.35]], '#8a0a1c', 0.03);
-  poly([[-1.62, 3.52], [-0.64, 3.56], [-0.64, 3.69], [-1.62, 3.65]], '#111', null);
-  // tank top, upright torso
-  poly([[-0.55, 2.0], [-0.75, 2.15], [-1.05, 2.17], [-1.4, 2.05], [-1.57, 3.62], [-0.68, 3.66], [-0.5, 2.8]], red, OUT, 0.09);
-  poly([[-1.4, 2.07], [-1.22, 2.17], [-1.36, 3.62], [-1.55, 3.6]], redDark, null);
-  ctx.fillStyle = redHi;
-  ctx.beginPath(); ctx.ellipse(-0.72, 2.5, 0.1, 0.28, -0.05, 0, Math.PI * 2); ctx.fill();
-  line([[-0.55, 2.01], [-0.75, 2.16], [-1.05, 2.18], [-1.38, 2.07]], '#fff', 0.06);   // neck trim
-  line([[-0.72, 3.3], [-1.25, 3.34]], redDark, 0.03);                                  // waist folds
-  line([[-0.8, 3.46], [-1.4, 3.49]], redDark, 0.025);
-  ctx.font = `0.6px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 0.16; ctx.strokeStyle = '#fff'; ctx.strokeText('23', -1.03, 2.92);
-  ctx.fillStyle = '#111'; ctx.fillText('23', -1.03, 2.92);
-}
-
 // Fingers wrap from the palm around the back of the ball; angles are around the ball.
 function ballHand() {
   limb([[-0.42, 0.5, 0.1], [-0.33, 0.35, 0.12], [-0.27, 0.27, 0.13]], SKIN_FAR, 0.035);
@@ -467,60 +477,156 @@ function ballHand() {
   limb([[Math.cos(2.2) * 0.44, Math.sin(2.2) * 0.44, 0.05],
         [Math.cos(1.75) * 0.33, Math.sin(1.75) * 0.33, 0.04]], SKIN_FAR, 0.025);   // thumb
 }
-// Open hand at the end of the arm flung out behind him.
-function openHand() {
-  limb([[-2.85, 2.45, 0.1], [-3.02, 2.48, 0.12]], SKIN, 0.035);
-  const tips = [[-3.32, 2.36], [-3.36, 2.46], [-3.34, 2.56], [-3.27, 2.64]];
-  tips.forEach((t, i) => limb([[-3.08, 2.42 + i * 0.05, 0.043], [t[0], t[1], 0.034]], SKIN, 0.025));
-  limb([[-2.97, 2.39, 0.045], [-3.1, 2.27, 0.036]], SKIN, 0.025);                 // thumb
-  limb([[-2.6, 2.41, 0.13], [-2.73, 2.43, 0.13]], WHITE, 0.035);                  // wristband
+// ---------- player rig ----------
+// The body is a small skeleton posed by absolute segment angles (0 = facing
+// direction, +π/2 = straight down), in u units with the pelvis at the origin.
+// Running, take-off and the free-throw-line dunk are poses that get blended, and
+// the jersey and shorts are built from the joints so they move with the limbs.
+const TORSO = 1.98, NECK = 0.45, UPPER = 0.8, FORE = 0.75, TO_BALL = 0.62, THIGH = 1.15, SHIN = 1.0;
+const V = (a, l) => [Math.cos(a) * l, Math.sin(a) * l];
+const add = (p, q) => [p[0] + q[0], p[1] + q[1]];
+const mix = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+const clamp01 = x => Math.max(0, Math.min(1, x));
+const smooth = x => { x = clamp01(x); return x * x * (3 - 2 * x); };
+
+// Ball held overhead, other arm flung back, legs split wide.
+const DUNK = { torso: -1.495, head: -1.23, tilt: -0.15, fu: -1.33, ff: -1.29, nu: 2.956, nf: 3.009,
+               nth: 0.172, nsh: 1.768, nshoe: 1.1, fth: 2.875, fsh: 2.953, fshoe: 2.6 };
+// Leaving the floor: front knee driving up, back leg pushing off, ball arm rising.
+const TAKEOFF = { torso: -1.55, head: -1.35, tilt: -0.1, fu: -1.1, ff: -1.2, nu: 2.3, nf: 2.6,
+                  nth: 0.0, nsh: 1.6, nshoe: 1.0, fth: 1.85, fsh: 2.0, fshoe: 1.9 };
+const POSE_KEYS = Object.keys(DUNK);
+const REACH_TURN = 1.06, LEAN = 0.3;
+
+// Running stride (phase ph, amount k 0..1) while dribbling with the ball arm.
+function runPose(ph, k, dribble, holding) {
+  const D = Math.PI / 2, s = Math.sin(ph), c = Math.cos(ph);
+  const torso = -1.5 + 0.18 * k;
+  const nth = D - 0.12 - 0.6 * k * s, fth = D + 0.12 + 0.6 * k * s;
+  const nsh = nth + 0.35 + 1.2 * k * Math.max(0, c), fsh = fth + 0.35 + 1.2 * k * Math.max(0, -c);
+  const nu = D + 0.1 + 0.75 * k * s;                          // arms swing against the legs
+  const fu = holding ? D - 0.55 : D + 0.1 - 0.75 * k * s;
+  const ff = holding ? D - 0.3 - 0.25 * Math.cos(dribble) : fu - 1.4;
+  return { torso, head: torso + 0.25, tilt: 0.05, fu, ff, nu, nf: nu - 1.4,
+           nth, nsh, nshoe: nsh - D - 0.1, fth, fsh, fshoe: fsh - D - 0.1 };
+}
+function blendPose(a, b, t) {
+  const o = {};
+  for (const k of POSE_KEYS) o[k] = a[k] + (b[k] - a[k]) * t;
+  return o;
+}
+// Swing the ball arm out in front, and lean the body in behind it.
+function applyReach(p, r) {
+  const d = r * REACH_TURN, l = d * LEAN;
+  p.fu += d; p.ff += d;
+  for (const k of POSE_KEYS) if (k !== 'fu' && k !== 'ff') p[k] += l;
+  return p;
+}
+function fk(p) {
+  const up = V(p.torso, 1), fwd = [-up[1], up[0]];
+  const at = (f, v) => [fwd[0] * f + up[0] * v, fwd[1] * f + up[1] * v];
+  const neck = at(0, TORSO);
+  const sF = add(neck, at(0.38, 0)), sN = add(neck, at(-0.35, -0.08));
+  const eF = add(sF, V(p.fu, UPPER)), wF = add(eF, V(p.ff, FORE)), ball = add(wF, V(p.ff, TO_BALL));
+  const eN = add(sN, V(p.nu, UPPER)), wN = add(eN, V(p.nf, FORE));
+  const hN = at(0.25, 0), hF = at(-0.25, 0);
+  const kN = add(hN, V(p.nth, THIGH)), aN = add(kN, V(p.nsh, SHIN));
+  const kF = add(hF, V(p.fth, THIGH)), aF = add(kF, V(p.fsh, SHIN));
+  return { fwd, at, neck, headC: add(neck, V(p.head, NECK)), sF, eF, wF, ball, sN, eN, wN, hN, kN, aN, hF, kF, aF };
+}
+// Lowest point of either sole below the pelvis (shoe heel/toe relative to the ankle).
+function footLow(j, p) {
+  const low = (a, ang) => {
+    const s = Math.sin(ang), c = Math.cos(ang);
+    return a[1] + Math.max(-0.22 * s + 0.5 * c, 0.83 * s + 0.5 * c);
+  };
+  return Math.max(low(j.aN, p.nshoe), low(j.aF, p.fshoe));
 }
 
-// Free-throw-line dunk pose, facing right: ball held high overhead, other arm flung
-// back, legs split wide. `reach` (0..1) swings the ball arm from overhead to stretched
-// out in front, pivoting around the ball so it stays under the cursor while the body
-// drops back behind it.
-const REACH_TURN = 1.06, LEAN = 0.3, HAND_TURN = -0.435;
-function reachPose(r) {
-  const d = r * REACH_TURN, L = 1 + r * 0.06, cs = Math.cos(d), sn = Math.sin(d);
-  return { d, rot: p => [(p[0] * cs - p[1] * sn) * L, (p[0] * sn + p[1] * cs) * L] };
+// ---------- player drawing ----------
+function arm(s, e, w, tone) {
+  limb([[...s, 0.18], [...mix(s, e, 0.4), 0.175], [...e, 0.12], [...mix(e, w, 0.25), 0.13], [...w, 0.09]], tone);
 }
-function drawPlayer(hx, hy, holding, r) {
-  const { d, rot } = reachPose(r);
-  const S = rot([-0.55, 2.05]);
-  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
-  const arm = [[-0.55, 2.05, 0.18], [-0.47, 1.7, 0.175], [-0.37, 1.32, 0.12], [-0.32, 1.1, 0.13], [-0.17, 0.63, 0.09]];
-  limb(arm.map(j => [...rot(j), j[2]]), SKIN_FAR);                                      // ball arm
-  // the rest of the body hangs off that shoulder and leans in as he reaches
-  ctx.save(); ctx.translate(S[0], S[1]); ctx.rotate(d * LEAN); ctx.translate(0.55, -2.05);
-  // trailing leg, straight out behind
-  limb([[-1.35, 4.05, 0.26], [-2.45, 4.35, 0.18], [-2.75, 4.4, 0.19], [-3.5, 4.55, 0.11]], SKIN_FAR);
-  limb([[-3.5, 4.55, 0.13], [-3.24, 4.52, 0.14]], WHITE, 0.035);
-  shoe(-3.5, 4.55, 2.6);
-  // driving knee forward, shin hanging down
-  limb([[-0.85, 4.1, 0.27], [0.3, 4.3, 0.19], [0.3, 4.65, 0.2], [0.12, 5.2, 0.11]], SKIN);
-  limb([[0.12, 5.2, 0.13], [0.2, 4.94, 0.14]], WHITE, 0.035);
-  shoe(0.12, 5.2, 1.1);
-  drawJersey();
-  limb([[-1.0, 2.15, 0.16], [-0.92, 1.85, 0.15]], SKIN);                               // neck
-  drawHead(-0.8, 1.68, -0.15);
-  limb([[-1.3, 2.2, 0.19], [-1.7, 2.27, 0.19], [-2.1, 2.35, 0.13], [-2.35, 2.38, 0.14], [-2.85, 2.45, 0.095]], SKIN); // back arm
-  openHand();
+function leg(h, k, a, shoeAng, tone) {
+  limb([[...h, 0.26], [...k, 0.18], [...mix(k, a, 0.25), 0.2], [...a, 0.11]], tone);
+  limb([[...a, 0.13], [...mix(a, k, 0.26), 0.14]], WHITE, 0.035);            // sock
+  shoe(a[0], a[1], shoeAng);
+}
+function handOpen(w, ang, tone, band) {
+  ctx.save(); ctx.translate(w[0], w[1]); ctx.rotate(ang);
+  limb([[0, 0, 0.1], [0.17, 0.02, 0.12]], tone, 0.035);
+  for (let i = 0; i < 4; i++) limb([[0.24, -0.07 + i * 0.05, 0.043], [0.47, -0.12 + i * 0.08, 0.034]], tone, 0.025);
+  limb([[0.1, -0.08, 0.045], [0.2, -0.2, 0.036]], tone, 0.025);             // thumb
+  if (band) limb([[-0.25, 0, 0.13], [-0.12, 0, 0.13]], WHITE, 0.035);        // wristband
   ctx.restore();
+}
+const RED = '#d91a2c', RED_DARK = '#a50d22', RED_HI = '#f2465a';
+function drawJersey(j, p) {
+  const P = j.at;
+  poly([P(0.55, 2.07), P(0.35, 1.92), P(0.05, 1.9), P(-0.3, 2.02), P(-0.47, 0.45), P(0.42, 0.41), P(0.6, 1.27)], RED, OUT, 0.09);
+  poly([P(-0.3, 2.0), P(-0.12, 1.9), P(-0.26, 0.45), P(-0.45, 0.47)], RED_DARK, null);
+  const hc = P(0.38, 1.57);
+  ctx.fillStyle = RED_HI;
+  ctx.beginPath(); ctx.ellipse(hc[0], hc[1], 0.1, 0.28, p.torso - Math.PI / 2, 0, Math.PI * 2); ctx.fill();
+  line([P(0.55, 2.06), P(0.35, 1.91), P(0.05, 1.89), P(-0.28, 2.0)], '#fff', 0.06);   // neck trim
+  line([P(0.42, 0.8), P(-0.12, 0.77)], RED_DARK, 0.03);                                // folds
+  line([P(0.36, 0.63), P(-0.28, 0.61)], RED_DARK, 0.025);
+  const n = P(0.07, 1.15);
+  ctx.save(); ctx.translate(n[0], n[1]); ctx.rotate(p.torso + Math.PI / 2); ctx.scale(facing, 1);
+  ctx.font = `0.6px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  ctx.lineWidth = 0.16; ctx.strokeStyle = '#fff'; ctx.strokeText('23', 0, 0);
+  ctx.fillStyle = '#111'; ctx.fillText('23', 0, 0);
   ctx.restore();
-
-  if (holding) {
-    star(hx - R * 0.9, hy - R * 0.2, R * (1.4 + 0.5 * Math.sin(clock * 14)), 0.9);
-    drawBall(hx, hy, 0);
+}
+// One baggy shorts leg hanging off the hip toward the knee, so it swings with the thigh.
+function shortsLeg(j, h, k, fill, trim) {
+  const d = [(k[0] - h[0]) / THIGH, (k[1] - h[1]) / THIGH];
+  let n = [-d[1], d[0]];
+  if (n[0] * j.fwd[0] + n[1] * j.fwd[1] < 0) n = [-n[0], -n[1]];            // n points forward
+  const top = add(h, [-d[0] * 0.25, -d[1] * 0.25]), hem = add(h, [d[0] * 0.72, d[1] * 0.72]);
+  const off = (p, w) => [p[0] + n[0] * w, p[1] + n[1] * w];
+  poly([off(top, 0.36), off(hem, 0.41), off(hem, -0.41), off(top, -0.36)], fill, OUT, 0.08);
+  line([off(mix(top, hem, 0.35), -0.1), off(mix(top, hem, 0.9), -0.02)], RED_DARK, 0.03);   // fold
+  if (trim) {
+    line([off(hem, 0.39), off(hem, -0.39)], '#fff', 0.035);
+    line([off(top, 0.33), off(hem, 0.37)], '#111', 0.11);
+    line([off(top, 0.33), off(hem, 0.37)], '#fff', 0.04);
   }
-  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u); ctx.rotate(d + HAND_TURN);
-  ballHand();
-  ctx.restore();
 }
-// How far (in u) his lowest foot hangs below the ball for a given reach.
-function feetDrop(r) {
-  const { d, rot } = reachPose(r);
-  return rot([-0.55, 2.05])[1] + 3.8 * Math.cos(d * LEAN);
+function drawShorts(j) {
+  const P = j.at;
+  poly([P(0.47, 0.55), P(-0.52, 0.5), P(-0.56, -0.1), P(0.0, -0.42), P(0.52, -0.1)], RED, OUT, 0.08);
+  shortsLeg(j, j.hN, j.kN, RED, true);
+  poly([P(-0.53, 0.6), P(0.49, 0.64), P(0.49, 0.49), P(-0.53, 0.45)], '#111', null);        // waistband
+}
+
+function drawPlayer() {
+  const j = J, p = pose;
+  const onBall = hasBall && Math.hypot(ballL[0] - j.ball[0], ballL[1] - j.ball[1]) < 0.12;
+  ctx.save(); ctx.translate(px, py); ctx.scale(facing * u, u);
+  arm(j.sF, j.eF, j.wF, SKIN_FAR);                                               // ball arm
+  if (!onBall) handOpen(j.wF, p.ff, SKIN_FAR, false);
+  leg(j.hF, j.kF, j.aF, p.fshoe, SKIN_FAR);
+  shortsLeg(j, j.hF, j.kF, RED_DARK, false);
+  leg(j.hN, j.kN, j.aN, p.nshoe, SKIN);
+  drawJersey(j, p);
+  drawShorts(j);
+  limb([[...j.neck, 0.16], [...mix(j.neck, j.headC, 0.6), 0.15]], SKIN);         // neck
+  drawHead(j.headC[0], j.headC[1], p.tilt);
+  arm(j.sN, j.eN, j.wN, SKIN);
+  handOpen(j.wN, p.nf, SKIN, true);
+  ctx.restore();
+
+  if (hasBall) {
+    if (air > 0.6) star(heldBall[0] - facing * R * 0.9, heldBall[1] - R * 0.2, R * (1.4 + 0.5 * Math.sin(clock * 14)), 0.9 * air);
+    drawBall(heldBall[0], heldBall[1], heldSpin);
+    if (onBall) {
+      ctx.save(); ctx.translate(px, py); ctx.scale(facing * u, u);
+      ctx.translate(ballL[0], ballL[1]); ctx.rotate(p.ff + Math.PI - 2.27);
+      ballHand();
+      ctx.restore();
+    }
+  }
 }
 
 function drawHUD() {
@@ -549,7 +655,7 @@ function drawHUD() {
   if (shots === 0) {
     const a = 0.6 + 0.4 * Math.sin(clock * 4);
     ctx.globalAlpha = a;
-    arcadeText(matchMedia('(pointer: coarse)').matches ? 'DRAG TO FLY - LIFT TO DROP' : 'MOVE TO FLY - CLICK TO DROP', W / 2, floorY + (H - floorY) / 2 - s * 0.3, Math.round(s * 0.5), '#fff', 'center');
+    arcadeText(matchMedia('(pointer: coarse)').matches ? 'DRAG LOW TO RUN, UP TO JUMP' : 'RUN LOW - FLY HIGH - CLICK TO DROP', W / 2, floorY + (H - floorY) / 2 - s * 0.3, Math.round(s * 0.5), '#fff', 'center');
     ctx.globalAlpha = 1;
   }
 
@@ -586,19 +692,14 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 1 / 30); last = now;
   clock += dt;
 
-  // stretch the ball out in front as he closes in on the rim
-  const near = Math.hypot(mx - (rimF + rimB) / 2, my - (rimY - 1.2 * u));
-  const target = Math.max(0, Math.min(1, (8 * u - near) / (5 * u)));
-  reach += (target - reach) * Math.min(1, dt * 8);
-  clampHand();
-
   if (!hasBall) { cooldown -= dt; if (cooldown <= 0) hasBall = true; }
   for (const b of balls) {
     b.life += dt;
     for (let i = 0; i < 4; i++) step(b, dt / 4);
     if (b.fire && b.life < 3) emitFire(b.x, b.y);
   }
-  if (hasBall && streak >= 3) emitFire(mx, my);
+  updatePlayer(dt, now);
+  if (hasBall && streak >= 3) emitFire(heldBall[0], heldBall[1]);
   balls = balls.filter(b => b.life < 8 && b.x < W + 4 * R);
   for (const s of sparks) { s.t += dt; s.x += s.vx * dt; s.y += s.vy * dt; }
   sparks = sparks.filter(s => s.t < 0.5);
@@ -612,7 +713,7 @@ function frame(now) {
   ctx.drawImage(bg, 0, 0, bg.width * P, bg.height * P);
   for (const f of flashes) star(f.x, f.y, 0.45 * u, 1 - f.t * 8);
   drawHoop();
-  drawShadow(mx - (1.0 + 1.5 * reach) * u, floorY - my - feetDrop(reach) * u);
+  drawShadow(px, floorY - feetY);
   for (const b of balls) drawShadow(b.x, floorY - b.y);
   for (const b of balls) drawBall(b.x, b.y, b.rot);
   drawRimAndNet();
@@ -620,7 +721,7 @@ function frame(now) {
   drawHUD();
   spriteCtx.clearRect(0, 0, W, H);
   ctx = spriteCtx; PX = PS;
-  drawPlayer(mx, my, hasBall, reach);
+  drawPlayer();
   ctx = mainCtx; PX = P;
   requestAnimationFrame(frame);
 }
