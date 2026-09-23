@@ -43,7 +43,7 @@ let balls = [], popups = [];
 let makes = 0, shots = 0, netSway = 0;
 
 function clampHand() {
-  my = Math.min(my, floorY - 5.9 * u);
+  my = Math.min(my, floorY - 6.3 * u);
   my = Math.max(my, R);
   mx = Math.max(3 * u, Math.min(W - R, mx));
 }
@@ -212,46 +212,62 @@ function shoe(x, y, ang) {
   ctx.restore();
 }
 
-// Player in a dunk pose, facing right. Origin = the ball in his raised hand; 1 unit = 1 u.
+// Player in a one-hand dunk pose, facing right. Origin = the ball, held out in front
+// of him; 1 unit = 1 u. His legs trail behind, one tucked, one kicked back.
 function drawPlayer(hx, hy, holding) {
-  const skin = '#7a4a2a', skinBack = '#5c3620', red = '#c8102e', redBack = '#9a0c23';
+  const skin = '#6e4226', skinBack = '#55321c', red = '#ce1141', redBack = '#a50d34';
   ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
 
-  // back arm, stretched behind for balance
-  limb([[-1.55, 2.25], [-2.3, 2.6], [-2.85, 2.1]], 0.3, skinBack);
-  // legs
-  limb([[-1.8, 4.0], [-2.2, 4.85], [-3.0, 4.95]], 0.36, skinBack);
-  shoe(-3.05, 5.0, 0.3);
-  limb([[-1.3, 4.0], [-0.7, 4.7], [-1.05, 5.55]], 0.38, skin);
-  shoe(-1.0, 5.65, 0.9);
-  // shorts
+  // ball arm (far side): reaches forward and up, cradling the ball
+  limb([[-1.35, 1.95], [-0.75, 1.15], [-0.22, 0.42]], 0.3, skinBack);
+  // trailing leg, kicked back and up behind him
+  limb([[-2.15, 4.05], [-3.05, 4.55], [-3.7, 4.05]], 0.36, skinBack);
+  limb([[-3.35, 4.35], [-3.6, 4.15]], 0.34, '#fff');            // sock
+  shoe(-3.8, 3.95, -2.4);
+  // tucked leg with knee brace
+  limb([[-1.7, 4.1], [-1.45, 5.05], [-2.15, 5.9]], 0.38, skin);
+  limb([[-1.53, 4.85], [-1.43, 5.15]], 0.44, '#111');           // knee brace
+  limb([[-1.9, 5.6], [-2.08, 5.82]], 0.4, '#fff');              // sock
+  shoe(-2.25, 6.0, 2.3);
+  // baggy shorts
   ctx.fillStyle = red;
   ctx.beginPath();
-  ctx.moveTo(-2.1, 3.7); ctx.lineTo(-1.15, 3.8); ctx.lineTo(-0.75, 4.55);
-  ctx.lineTo(-1.45, 4.75); ctx.lineTo(-1.8, 4.3); ctx.lineTo(-2.45, 4.6); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.06; ctx.stroke();
-  // torso / jersey
+  ctx.moveTo(-2.4, 3.6); ctx.lineTo(-1.35, 3.65); ctx.lineTo(-1.1, 4.7);
+  ctx.lineTo(-1.95, 4.8); ctx.lineTo(-2.1, 4.45); ctx.lineTo(-2.75, 4.65); ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.07; ctx.stroke();
+  ctx.fillStyle = '#111'; ctx.fillRect(-2.4, 3.55, 1.05, 0.1);   // waistband
+  // tank-top jersey, long torso leaning slightly back
   ctx.fillStyle = red;
   ctx.beginPath();
-  ctx.moveTo(-0.85, 2.1); ctx.lineTo(-1.65, 2.05); ctx.lineTo(-2.05, 3.85); ctx.lineTo(-1.15, 3.95); ctx.closePath();
-  ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 0.6px Arial Black, Arial, sans-serif';
+  ctx.moveTo(-1.3, 1.9); ctx.lineTo(-1.55, 2.05); ctx.lineTo(-1.95, 2.0); ctx.lineTo(-2.15, 1.95);
+  ctx.lineTo(-2.45, 3.6); ctx.lineTo(-1.35, 3.65); ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.07; ctx.stroke();
+  ctx.font = 'bold 0.72px Arial Black, Arial, sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('23', -1.43, 3.0);
-  // neck + head
-  limb([[-1.25, 2.1], [-1.15, 1.8]], 0.28, skin);
+  ctx.lineWidth = 0.1; ctx.strokeStyle = '#fff'; ctx.strokeText('23', -1.88, 2.9);
+  ctx.fillStyle = '#111'; ctx.fillText('23', -1.88, 2.9);
+  // neck + bald head, eyes on the ball
+  limb([[-1.75, 1.95], [-1.6, 1.7]], 0.28, skin);
   ctx.fillStyle = skin;
-  ctx.beginPath(); ctx.arc(-1.1, 1.45, 0.38, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(-1.38, 1.5, 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(-1.5, 1.35, 0.33, 0.38, -0.3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-1.75, 1.42, 0.09, 0, Math.PI * 2); ctx.fill();   // ear
   ctx.fillStyle = '#1a0f08';
-  ctx.beginPath(); ctx.arc(-0.9, 1.33, 0.05, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(-0.85, 1.62, 0.08, 0.06, 0, 0, Math.PI * 2); ctx.fill();
-  // front arm, raised to the ball
-  limb([[-0.9, 2.25], [-0.35, 1.3], [0.02, 0.5]], 0.32, skin);
-  limb([[-0.17, 0.95], [-0.1, 0.8]], 0.36, '#fff'); // wristband
+  ctx.beginPath(); ctx.arc(-1.28, 1.22, 0.045, 0, Math.PI * 2); ctx.fill(); // eye
+  ctx.beginPath(); ctx.ellipse(-1.3, 1.55, 0.07, 0.05, 0, 0, Math.PI * 2); ctx.fill();
+  // near arm: stretched forward and down, wristband at the hand
+  limb([[-1.95, 2.15], [-1.15, 2.7], [-0.35, 3.05]], 0.32, skin);
+  limb([[-0.62, 2.95], [-0.45, 3.02]], 0.38, '#fff');
+  ctx.fillStyle = skin;
+  ctx.beginPath(); ctx.arc(-0.25, 3.08, 0.2, 0, Math.PI * 2); ctx.fill();
 
   ctx.restore();
   if (holding) drawBall(hx, hy, 0);
+  // fingers over the ball so it reads as palmed
+  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
+  if (holding) limb([[-0.28, 0.3], [-0.05, 0.36]], 0.16, skinBack);
+  ctx.restore();
 }
 
 function drawHUD() {
