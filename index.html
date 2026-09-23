@@ -563,33 +563,64 @@ function handOpen(w, ang, tone, band) {
   ctx.restore();
 }
 const RED = '#d91a2c', RED_DARK = '#a50d22', RED_HI = '#f2465a';
+// Tank top as one piece of fabric: curved chest and back, the near armhole cut out
+// (his side shows through it and the arm comes out of it), collar scooping under the
+// front of the neck, piping on every edge, shading and drape folds.
 function drawJersey(j, p) {
-  const P = j.at;
-  // tank top: back strap, collar scooping under the front of the neck, front strap, armhole
+  const P = j.at, Q = (c, e) => ctx.quadraticCurveTo(...P(...c), ...P(...e));
+  // side of the chest seen through the armhole
+  ctx.fillStyle = SKIN.dark;
+  ctx.beginPath(); ctx.ellipse(...P(-0.3, 1.68), 0.3, 0.42, p.torso - Math.PI / 2, 0, Math.PI * 2); ctx.fill();
+
   const body = () => {
-    const pts = [P(-0.44, 1.96), P(-0.2, 2.03)];
-    ctx.beginPath(); ctx.moveTo(...P(-0.47, 0.45)); ctx.lineTo(...pts[0]); ctx.lineTo(...pts[1]);
-    ctx.quadraticCurveTo(...P(0.02, 1.84), ...P(0.24, 1.9));
-    ctx.lineTo(...P(0.36, 2.0));
-    ctx.quadraticCurveTo(...P(0.6, 1.9), ...P(0.6, 1.27));
-    ctx.lineTo(...P(0.42, 0.41)); ctx.closePath();
+    ctx.beginPath(); ctx.moveTo(...P(-0.47, 0.42));
+    Q([-0.62, 1.1], [-0.56, 1.78]);                 // back
+    Q([-0.46, 1.22], [-0.27, 1.28]);                // armhole, down the back side
+    Q([-0.04, 1.36], [-0.1, 2.03]);                 // ...and up the front to the strap
+    Q([0.03, 1.8], [0.25, 1.88]);                   // collar under the front of the neck
+    ctx.lineTo(...P(0.34, 2.0));                    // far strap
+    Q([0.62, 1.92], [0.6, 1.35]);                   // far armhole
+    Q([0.64, 0.85], [0.43, 0.42]);                  // chest to waist
+    ctx.closePath();
   };
-  body(); ctx.fillStyle = RED; ctx.fill();
-  ctx.strokeStyle = OUT; ctx.lineWidth = 0.09; ctx.lineJoin = 'round'; ctx.stroke();
-  poly([P(-0.43, 1.97), P(-0.25, 2.01), P(-0.28, 0.45), P(-0.45, 0.47)], RED_DARK, null);
-  const hc = P(0.38, 1.57);
-  ctx.fillStyle = RED_HI;
-  ctx.beginPath(); ctx.ellipse(hc[0], hc[1], 0.1, 0.28, p.torso - Math.PI / 2, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#fff'; ctx.lineCap = 'round';                                     // collar trim
-  ctx.lineWidth = 0.06;
-  ctx.beginPath(); ctx.moveTo(...P(-0.2, 2.01)); ctx.quadraticCurveTo(...P(0.02, 1.82), ...P(0.24, 1.88)); ctx.stroke();
-  ctx.lineWidth = 0.045;                                                                  // far armhole
-  ctx.beginPath(); ctx.moveTo(...P(0.3, 2.0)); ctx.quadraticCurveTo(...P(0.56, 1.92), ...P(0.58, 1.4)); ctx.stroke();
-  line([P(0.42, 0.8), P(-0.12, 0.77)], RED_DARK, 0.03);                                // folds
-  line([P(0.36, 0.63), P(-0.28, 0.61)], RED_DARK, 0.025);
-  const n = P(0.07, 1.15);
-  ctx.save(); ctx.translate(n[0], n[1]); ctx.rotate(p.torso + Math.PI / 2); ctx.scale(facing, 1);
+  body();
+  const g = ctx.createLinearGradient(...P(-0.6, 1.2), ...P(0.62, 1.2));
+  g.addColorStop(0, '#8e0a1d'); g.addColorStop(0.35, RED_DARK); g.addColorStop(0.62, RED);
+  g.addColorStop(0.82, '#e8303f'); g.addColorStop(1, RED);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.07; ctx.lineJoin = 'round'; ctx.stroke();
+
+  ctx.save(); body(); ctx.clip();
+  ctx.strokeStyle = 'rgba(60,0,10,0.35)'; ctx.lineCap = 'round';
+  for (const [a, c, e, w] of [                      // drape from the armpit, bunching at the tuck
+    [[-0.28, 1.25], [-0.1, 0.95], [0.12, 0.62], 0.03],
+    [[-0.4, 1.2], [-0.3, 0.9], [-0.18, 0.6], 0.025],
+    [[0.5, 0.62], [0.2, 0.7], [-0.1, 0.58], 0.025],
+    [[0.3, 0.5], [0.0, 0.58], [-0.35, 0.5], 0.02]]) {
+    ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(...P(...a)); Q(c, e); ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(255,170,180,0.22)'; ctx.lineWidth = 0.05;   // sheen across the chest
+  ctx.beginPath(); ctx.moveTo(...P(0.5, 1.7)); Q([0.56, 1.2], [0.46, 0.8]); ctx.stroke();
+  ctx.restore();
+
+  // piping: ribbed collar, both armholes
+  const pipe = (pts) => {
+    for (const [col, w] of [[OUT, 0.085], ['#fff', 0.05]]) {
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(...P(...pts[0]));
+      for (let i = 1; i < pts.length; i += 2) Q(pts[i], pts[i + 1]);
+      ctx.stroke();
+    }
+  };
+  pipe([[-0.1, 2.02], [0.03, 1.81], [0.25, 1.87]]);
+  pipe([[-0.55, 1.76], [-0.46, 1.23], [-0.27, 1.29], [-0.05, 1.37], [-0.1, 2.0]]);
+  pipe([[0.34, 1.99], [0.6, 1.91], [0.59, 1.36]]);
+
+  // number: black with white and red borders
+  const n = P(0.1, 1.08);
+  ctx.save(); ctx.translate(n[0], n[1]); ctx.rotate(p.torso + Math.PI / 2); ctx.scale(facing * 0.92, 1);
   ctx.font = `0.44px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  ctx.lineWidth = 0.2; ctx.strokeStyle = '#e8303f'; ctx.strokeText('23', 0, 0);
   ctx.lineWidth = 0.12; ctx.strokeStyle = '#fff'; ctx.strokeText('23', 0, 0);
   ctx.fillStyle = '#111'; ctx.fillText('23', 0, 0);
   ctx.restore();
@@ -677,17 +708,6 @@ function drawShorts(j) {
   ctx.restore();
 }
 
-// Tank-top armhole around a shoulder: a band of jersey with white piping that the
-// arm comes out of, the top of it being the strap over the shoulder.
-function armhole(sh, torso, behind) {
-  ctx.save(); ctx.translate(sh[0], sh[1]); ctx.rotate(torso + Math.PI / 2);
-  ctx.fillStyle = behind ? RED_DARK : RED; ctx.strokeStyle = OUT; ctx.lineWidth = 0.06;
-  ctx.beginPath(); ctx.ellipse(0.03, 0.1, 0.33, 0.35, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.05;
-  ctx.beginPath(); ctx.ellipse(0.03, 0.1, 0.27, 0.29, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
-}
-
 function drawPlayer() {
   const j = J, p = pose;
   const onBall = hasBall && Math.hypot(ballL[0] - j.ball[0], ballL[1] - j.ball[1]) < 0.12;
@@ -701,7 +721,6 @@ function drawPlayer() {
   drawJersey(j, p);
   drawShorts(j);
   drawHead(j.headC[0], j.headC[1], p.tilt);
-  armhole(j.sN, p.torso, false);
   arm(j.sN, j.eN, j.wN, SKIN);
   handOpen(j.wN, p.nf, SKIN, true);
   ctx.restore();
