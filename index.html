@@ -4,9 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dunk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
-    canvas { display: block; cursor: none; touch-action: none; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; cursor: none; touch-action: none; image-rendering: pixelated; }
   </style>
 </head>
 <body>
@@ -14,33 +17,119 @@
 <script>
 const c = document.getElementById('c');
 const ctx = c.getContext('2d');
+const bg = document.createElement('canvas');   // static arena, painted once per resize
+const bctx = bg.getContext('2d');
+const FONT = '"Press Start 2P", monospace';
+const OUT = '#1a0a05';                          // sprite outline
 
-let W, H, u, R, floorY, rimY, bbX, rimF, rimB, poleX;
+// Everything is drawn in screen pixels onto a canvas 1/P the size, then scaled up
+// with no smoothing: that's what gives the chunky arcade-sprite look.
+let W, H, P, u, R, floorY, rimY, bbX, rimF, rimB, poleX;
 
 function layout() {
-  const dpr = window.devicePixelRatio || 1;
   W = innerWidth; H = innerHeight;
-  c.width = W * dpr; c.height = H * dpr;
-  c.style.width = W + 'px'; c.style.height = H + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  floorY = H * 0.88;
+  floorY = H * 0.86;
   u = Math.min(floorY / 13.5, W / 20);   // 1 u ≈ 1 foot
+  P = Math.max(2, Math.round(u / 15));   // chunkier pixels on bigger screens
+  c.width = bg.width = Math.ceil(W / P);
+  c.height = bg.height = Math.ceil(H / P);
+  c.style.width = W + 'px'; c.style.height = H + 'px';
+  ctx.setTransform(1 / P, 0, 0, 1 / P, 0, 0);
+  bctx.setTransform(1 / P, 0, 0, 1 / P, 0, 0);
+  ctx.imageSmoothingEnabled = false;
   R = 0.42 * u;                           // ball radius
   rimY = floorY - 10 * u;                 // 10 ft rim
-  bbX = W - Math.max(3 * u, W * 0.1);     // backboard front face
+  bbX = W - Math.max(3.4 * u, W * 0.1);   // backboard front face
   rimB = bbX - 0.5 * u;                   // back of rim
   rimF = rimB - 1.5 * u;                  // front of rim
-  poleX = bbX + 2.4 * u;
+  poleX = bbX + 2.6 * u;
+  paintBackground();
 }
-layout();
-addEventListener('resize', layout);
 
-// ---------- input ----------
-let mx = W * 0.35, my = H * 0.4;
+function rng(seed) {
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function paintBackground() {
+  const g = bctx, rand = rng(23);
+  let grad = g.createLinearGradient(0, 0, 0, floorY);
+  grad.addColorStop(0, '#140a1f'); grad.addColorStop(1, '#3b1d2c');
+  g.fillStyle = grad; g.fillRect(0, 0, W, floorY);
+
+  // packed crowd, dimmer toward the upper deck
+  const skins = ['#ffdbac', '#f1c27d', '#e0ac69', '#c68642', '#8d5524', '#5c3a1e'];
+  const shirts = ['#d62828', '#f77f00', '#fcbf49', '#2a9d8f', '#264653', '#e9c46a', '#8338ec',
+                  '#3a86ff', '#ff006e', '#f1f1f1', '#1b998b', '#c1121f', '#6a4c93'];
+  const hair = ['#1a0f08', '#2b1a10', '#5a3b1c', '#c9a15a', '#777'];
+  const bottom = floorY - 1.2 * u, rowH = 0.6 * u, colW = 0.5 * u;
+  for (let y = -0.2 * u; y < bottom; y += rowH) {
+    const near = Math.max(0, y / bottom);
+    for (let x = -colW * rand(); x < W + colW; x += colW * (0.8 + rand() * 0.4)) {
+      const hx = x + rand() * 0.12 * u, hy = y + rand() * 0.14 * u;
+      g.globalAlpha = 0.3 + 0.7 * near;
+      g.fillStyle = shirts[(rand() * shirts.length) | 0];
+      g.fillRect(hx - 0.22 * u, hy + 0.15 * u, 0.44 * u, rowH);
+      if (rand() < 0.07) {                                  // someone with their arms up
+        g.fillRect(hx - 0.3 * u, hy - 0.45 * u, 0.1 * u, 0.6 * u);
+        g.fillRect(hx + 0.2 * u, hy - 0.45 * u, 0.1 * u, 0.6 * u);
+      }
+      g.fillStyle = skins[(rand() * skins.length) | 0];
+      g.beginPath(); g.arc(hx, hy, 0.17 * u, 0, Math.PI * 2); g.fill();
+      if (rand() < 0.6) {
+        g.fillStyle = hair[(rand() * hair.length) | 0];
+        g.fillRect(hx - 0.17 * u, hy - 0.19 * u, 0.34 * u, 0.12 * u);
+      }
+    }
+  }
+  g.globalAlpha = 1;
+  g.fillStyle = 'rgba(18,8,30,0.4)';                        // push the crowd back so the player pops
+  g.fillRect(0, 0, W, bottom);
+  grad = g.createLinearGradient(0, 0, 0, floorY * 0.5);
+  grad.addColorStop(0, 'rgba(0,0,0,0.65)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, W, floorY * 0.5);
+
+  // courtside boards
+  const boardTop = floorY - 1.2 * u;
+  for (let x = 0, i = 0; x < W; x += 4 * u, i++) {
+    g.fillStyle = i % 2 ? '#1d2f7a' : '#b3122a';
+    g.fillRect(x, boardTop, 4 * u, 1.2 * u);
+    g.fillStyle = 'rgba(255,255,255,0.18)';
+    g.fillRect(x + 0.4 * u, boardTop + 0.35 * u, 3.2 * u, 0.5 * u);
+  }
+  g.fillStyle = '#fff'; g.fillRect(0, boardTop, W, 0.08 * u);
+
+  // glossy hardwood
+  grad = g.createLinearGradient(0, floorY, 0, H);
+  grad.addColorStop(0, '#f0a456'); grad.addColorStop(1, '#b8662b');
+  g.fillStyle = grad; g.fillRect(0, floorY, W, H - floorY);
+  g.fillStyle = 'rgba(120,55,15,0.28)';
+  for (let y = floorY + 0.3 * u; y < H; y += 0.3 * u) g.fillRect(0, y, W, P);
+  grad = g.createLinearGradient(0, floorY, 0, floorY + 1.2 * u);
+  grad.addColorStop(0, 'rgba(255,240,210,0.35)'); grad.addColorStop(1, 'rgba(255,240,210,0)');
+  g.fillStyle = grad; g.fillRect(0, floorY, W, 1.2 * u);
+  // red apron past the baseline
+  g.fillStyle = '#b3122a'; g.fillRect(bbX + 0.1 * u, floorY, W, H - floorY);
+  g.fillStyle = '#fff';
+  g.fillRect(0, floorY, W, P);
+  g.fillRect(bbX + 0.1 * u, floorY, 0.15 * u, H - floorY);
+}
+
+// ---------- state + input ----------
+let mx, my;
 let history = [];
 let hasBall = true, cooldown = 0;
-let balls = [], popups = [];
-let makes = 0, shots = 0, netSway = 0;
+let balls = [], popups = [], sparks = [], flashes = [];
+let makes = 0, shots = 0, streak = 0, netSway = 0, clock = 0;
+
+layout();
+mx = W * 0.35; my = H * 0.4;
+addEventListener('resize', layout);
+document.fonts && document.fonts.load(`8px ${FONT}`);
 
 function clampHand() {
   my = Math.min(my, floorY - 6.3 * u);
@@ -65,7 +154,7 @@ function drop() {
     const max = 40 * u, sp = Math.hypot(vx, vy);
     if (sp > max) { vx *= max / sp; vy *= max / sp; }
   }
-  balls.push({ x: mx, y: my, vx, vy, rot: 0, life: 0, scored: false });
+  balls.push({ x: mx, y: my, vx, vy, rot: 0, life: 0, fire: streak >= 3 });
   if (balls.length > 12) balls.shift();
   shots++;
   hasBall = false; cooldown = 0.4;
@@ -102,73 +191,72 @@ function step(b, dt) {
 
   if (bounceOffPoint(b, rimF, rimY, 0.09 * u, 0.55)) b.touched = true;
   if (bounceOffPoint(b, rimB, rimY, 0.09 * u, 0.55)) b.touched = true;
-  if (bounceOffRect(b, bbX, rimY - 2.9 * u, bbX + 0.25 * u, rimY + 0.6 * u, 0.65)) b.touched = true;
-  bounceOffRect(b, poleX - 0.3 * u, rimY - 2.3 * u, poleX + 0.3 * u, floorY, 0.5);
+  if (bounceOffRect(b, bbX, rimY - 2.9 * u, bbX + 0.3 * u, rimY + 0.6 * u, 0.65)) b.touched = true;
+  bounceOffRect(b, poleX - 0.25 * u, rimY - 0.9 * u, poleX + 0.25 * u, floorY, 0.5);
 
   if (b.y > floorY - R) {
     b.y = floorY - R;
     if (b.vy > 0) b.vy = -b.vy * 0.62;
     b.vx *= 0.9;
     if (Math.abs(b.vy) < 2 * u) b.vy = 0;
+    if (!b.scored && !b.missed) { b.missed = true; streak = 0; }
   }
   if (b.x < R) { b.x = R; b.vx = Math.abs(b.vx) * 0.6; }
 
-  if (!b.scored && prevY < rimY && b.y >= rimY && b.vy > 0 && b.x > rimF && b.x < rimB) {
-    b.scored = true; makes++; netSway = 1;
-    popups.push({ x: (rimF + rimB) / 2, y: rimY - 1.5 * u, t: 0, text: b.touched ? '2 PTS' : 'SWISH!' });
+  if (!b.scored && !b.missed && prevY < rimY && b.y >= rimY && b.vy > 0 && b.x > rimF && b.x < rimB) {
+    b.scored = true; makes++; streak++; netSway = 1;
+    const text = streak === 3 ? 'ON FIRE!' : b.touched ? 'JAM!' : 'SWISH!';
+    popups.push({ x: (rimF + rimB) / 2, y: rimY - 2.2 * u, t: 0, text });
   }
 }
 
-// ---------- drawing ----------
-function drawCourt() {
-  const sky = ctx.createLinearGradient(0, 0, 0, floorY);
-  sky.addColorStop(0, '#0d1026'); sky.addColorStop(1, '#2a1e3d');
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, floorY);
+// ---------- drawing helpers ----------
+function tube(x1, y1, x2, y2, w) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#16324f'; ctx.lineWidth = w + 2 * P;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.strokeStyle = '#7ec8e3'; ctx.lineWidth = w;
+  ctx.stroke();
+  ctx.strokeStyle = '#dff6ff'; ctx.lineWidth = w * 0.3;
+  ctx.beginPath(); ctx.moveTo(x1 - w * 0.2, y1 - w * 0.2); ctx.lineTo(x2 - w * 0.2, y2 - w * 0.2); ctx.stroke();
+}
 
-  // arena lights
-  for (let i = 0; i < 6; i++) {
-    const lx = (i + 0.5) * W / 6;
-    const g = ctx.createRadialGradient(lx, 0, 0, lx, 0, u * 5);
-    g.addColorStop(0, 'rgba(255,240,200,0.35)'); g.addColorStop(1, 'rgba(255,240,200,0)');
-    ctx.fillStyle = g; ctx.fillRect(lx - u * 5, 0, u * 10, u * 5);
-  }
-  // crowd band
-  ctx.fillStyle = '#1a1428';
-  ctx.fillRect(0, floorY - 3.2 * u, W, 3.2 * u);
-  for (let i = 0; i < W / (0.7 * u); i++) {
-    const hx = i * 0.7 * u + (i % 2) * 0.2 * u, hy = floorY - 2.6 * u + (i % 3) * 0.35 * u;
-    ctx.fillStyle = ['#3b2f4f', '#45355c', '#302642'][i % 3];
-    ctx.beginPath(); ctx.arc(hx, hy, 0.28 * u, 0, Math.PI * 2); ctx.fill();
-    ctx.fillRect(hx - 0.33 * u, hy + 0.25 * u, 0.66 * u, 2 * u);
-  }
-  // floor
-  const wood = ctx.createLinearGradient(0, floorY, 0, H);
-  wood.addColorStop(0, '#d9a25f'); wood.addColorStop(1, '#a8703a');
-  ctx.fillStyle = wood; ctx.fillRect(0, floorY, W, H - floorY);
-  ctx.strokeStyle = 'rgba(90,50,20,0.25)'; ctx.lineWidth = 1;
-  for (let y = floorY + 0.35 * u; y < H; y += 0.35 * u) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-  }
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, floorY, W, 2);
-  ctx.fillRect(bbX + 0.1 * u, floorY, 3, H - floorY); // baseline
+function star(x, y, s, alpha) {
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#9fd8ff';
+  ctx.beginPath();
+  ctx.moveTo(x, y - s); ctx.lineTo(x + s * 0.18, y - s * 0.18); ctx.lineTo(x + s, y);
+  ctx.lineTo(x + s * 0.18, y + s * 0.18); ctx.lineTo(x, y + s); ctx.lineTo(x - s * 0.18, y + s * 0.18);
+  ctx.lineTo(x - s, y); ctx.lineTo(x - s * 0.18, y - s * 0.18); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(x, y, s * 0.22, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function arcadeText(text, x, y, size, fill, align = 'left') {
+  ctx.font = `${size}px ${FONT}`; ctx.textAlign = align; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#000'; ctx.fillText(text, x + P, y + P);
+  ctx.lineJoin = 'round'; ctx.lineWidth = P * 1.5; ctx.strokeStyle = '#000'; ctx.strokeText(text, x, y);
+  ctx.fillStyle = fill; ctx.fillText(text, x, y);
 }
 
 function drawHoop() {
-  // stanchion
-  ctx.fillStyle = '#2b2f36';
-  ctx.fillRect(poleX - 0.9 * u, floorY - 1.2 * u, 2.2 * u, 1.2 * u);
-  ctx.fillStyle = '#c8102e';
-  ctx.fillRect(poleX - 0.3 * u, rimY - 2.3 * u, 0.6 * u, floorY - rimY + 1.1 * u);
-  ctx.fillStyle = '#3a3f47';
-  ctx.fillRect(bbX + 0.25 * u, rimY - 1.6 * u, poleX - bbX, 0.3 * u);
-  // backboard (edge-on)
-  ctx.fillStyle = 'rgba(230,240,255,0.9)';
-  ctx.fillRect(bbX, rimY - 2.9 * u, 0.25 * u, 3.5 * u);
-  ctx.fillStyle = '#c8102e';
-  ctx.fillRect(bbX, rimY - 1.5 * u, 0.25 * u, 1.5 * u);
-  // net
+  // padded base + light-blue stanchion
+  ctx.fillStyle = '#b3122a'; ctx.fillRect(poleX - 0.9 * u, floorY - 1.6 * u, 2.6 * u, 1.6 * u);
+  ctx.fillStyle = '#e63946'; ctx.fillRect(poleX - 0.9 * u, floorY - 1.6 * u, 2.6 * u, 0.25 * u);
+  ctx.fillStyle = OUT; ctx.fillRect(poleX - 0.9 * u, floorY - 1.6 * u, P, 1.6 * u);
+  tube(poleX, floorY - 1.6 * u, poleX, rimY - 0.9 * u, 0.5 * u);
+  tube(poleX, rimY - 0.9 * u, bbX + 0.4 * u, rimY - 2.3 * u, 0.36 * u);
+  tube(poleX, rimY - 0.2 * u, bbX + 0.4 * u, rimY + 0.3 * u, 0.3 * u);
+  // glass backboard, edge-on, with padded bottom
+  ctx.fillStyle = 'rgba(190,235,255,0.6)'; ctx.fillRect(bbX, rimY - 2.9 * u, 0.3 * u, 3.5 * u);
+  ctx.fillStyle = '#fff'; ctx.fillRect(bbX, rimY - 2.9 * u, P, 3.5 * u);
+  ctx.fillStyle = '#1d3557'; ctx.fillRect(bbX - P, rimY + 0.45 * u, 0.3 * u + 2 * P, 0.3 * u);
+}
+
+function drawRimAndNet() {
   const sway = Math.sin(netSway * 12) * netSway * 0.35 * u;
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = P;
   const nb = rimY + 1.6 * u, inset = 0.35 * u;
   for (let i = 0; i <= 5; i++) {
     const tx = rimF + (rimB - rimF) * i / 5;
@@ -179,111 +267,178 @@ function drawHoop() {
     const y = rimY + (nb - rimY) * k / 3, ins = inset * k / 3, s = sway * k / 3;
     ctx.beginPath(); ctx.moveTo(rimF + ins + s, y); ctx.lineTo(rimB - ins + s, y); ctx.stroke();
   }
-  // rim
-  ctx.strokeStyle = '#ff5a1f'; ctx.lineWidth = 0.18 * u; ctx.lineCap = 'round';
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.2 * u + 2 * P;
   ctx.beginPath(); ctx.moveTo(rimF, rimY); ctx.lineTo(bbX, rimY); ctx.stroke();
+  ctx.strokeStyle = '#ff4d1a'; ctx.lineWidth = 0.2 * u;
+  ctx.stroke();
+}
+
+function drawShadow(x, height) {
+  const k = Math.max(0.25, 1 - height / (12 * u));
+  ctx.fillStyle = `rgba(40,15,0,${0.35 * k})`;
+  ctx.beginPath(); ctx.ellipse(x, floorY + 0.25 * u, 1.4 * u * k, 0.18 * u, 0, 0, Math.PI * 2); ctx.fill();
 }
 
 function drawBall(x, y, rot) {
   ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
-  ctx.fillStyle = '#e8671c';
+  ctx.fillStyle = OUT;
+  ctx.beginPath(); ctx.arc(0, 0, R + P, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f07a1f';
   ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#3a1a08'; ctx.lineWidth = Math.max(1.2, R * 0.08);
-  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = OUT; ctx.lineWidth = P;
   ctx.beginPath(); ctx.moveTo(-R, 0); ctx.lineTo(R, 0); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, -R); ctx.lineTo(0, R); ctx.stroke();
   ctx.beginPath(); ctx.arc(-R * 1.25, 0, R * 0.85, -0.9, 0.9); ctx.stroke();
   ctx.beginPath(); ctx.arc(R * 1.25, 0, R * 0.85, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
   ctx.restore();
+  ctx.fillStyle = 'rgba(255,230,180,0.7)';
+  ctx.beginPath(); ctx.arc(x - R * 0.4, y - R * 0.4, R * 0.25, 0, Math.PI * 2); ctx.fill();
 }
 
-function limb(pts, w, color) {
-  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+// Limbs are thick strokes with a dark sprite outline and a highlight streak.
+function limb(pts, w, color, hi) {
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.stroke();
+  ctx.strokeStyle = OUT; ctx.lineWidth = w + 0.16; ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.stroke();
+  if (hi) {
+    ctx.save(); ctx.translate(-w * 0.18, -w * 0.18);
+    ctx.strokeStyle = hi; ctx.lineWidth = w * 0.3; ctx.stroke();
+    ctx.restore();
+  }
+}
+function shape(pts, fill) {
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.14; ctx.lineJoin = 'round'; ctx.stroke();
 }
 function shoe(x, y, ang) {
   ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.fillStyle = OUT;
+  ctx.beginPath(); ctx.ellipse(0.2, 0, 0.5, 0.27, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#f4f4f4';
   ctx.beginPath(); ctx.ellipse(0.2, 0, 0.42, 0.2, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#c8102e';
-  ctx.beginPath(); ctx.ellipse(0.05, -0.05, 0.25, 0.12, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(-0.1, -0.08, 0.35, 0.12);
   ctx.restore();
 }
 
 // Player in a one-hand dunk pose, facing right. Origin = the ball, held out in front
 // of him; 1 unit = 1 u. His legs trail behind, one tucked, one kicked back.
 function drawPlayer(hx, hy, holding) {
-  const skin = '#6e4226', skinBack = '#55321c', red = '#ce1141', redBack = '#a50d34';
+  const skin = '#7b4a2b', skinHi = '#b07a4f', skinBack = '#583219';
+  const red = '#e0242f', redHi = '#ff6b6b';
   ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
 
   // ball arm (far side): reaches forward and up, cradling the ball
-  limb([[-1.35, 1.95], [-0.75, 1.15], [-0.22, 0.42]], 0.3, skinBack);
+  limb([[-1.35, 1.95], [-0.75, 1.15], [-0.22, 0.42]], 0.3, skinBack, skin);
   // trailing leg, kicked back and up behind him
-  limb([[-2.15, 4.05], [-3.05, 4.55], [-3.7, 4.05]], 0.36, skinBack);
-  limb([[-3.35, 4.35], [-3.6, 4.15]], 0.34, '#fff');            // sock
+  limb([[-2.15, 4.05], [-3.05, 4.55], [-3.7, 4.05]], 0.36, skinBack, skin);
+  limb([[-3.35, 4.35], [-3.6, 4.15]], 0.34, '#fff');
   shoe(-3.8, 3.95, -2.4);
   // tucked leg with knee brace
-  limb([[-1.7, 4.1], [-1.45, 5.05], [-2.15, 5.9]], 0.38, skin);
-  limb([[-1.53, 4.85], [-1.43, 5.15]], 0.44, '#111');           // knee brace
-  limb([[-1.9, 5.6], [-2.08, 5.82]], 0.4, '#fff');              // sock
+  limb([[-1.7, 4.1], [-1.45, 5.05], [-2.15, 5.9]], 0.38, skin, skinHi);
+  limb([[-1.53, 4.85], [-1.43, 5.15]], 0.44, '#111');
+  limb([[-1.9, 5.6], [-2.08, 5.82]], 0.4, '#fff');
   shoe(-2.25, 6.0, 2.3);
   // baggy shorts
-  ctx.fillStyle = red;
-  ctx.beginPath();
-  ctx.moveTo(-2.4, 3.6); ctx.lineTo(-1.35, 3.65); ctx.lineTo(-1.1, 4.7);
-  ctx.lineTo(-1.95, 4.8); ctx.lineTo(-2.1, 4.45); ctx.lineTo(-2.75, 4.65); ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.07; ctx.stroke();
-  ctx.fillStyle = '#111'; ctx.fillRect(-2.4, 3.55, 1.05, 0.1);   // waistband
+  shape([[-2.4, 3.6], [-1.35, 3.65], [-1.1, 4.7], [-1.95, 4.8], [-2.1, 4.45], [-2.75, 4.65]], red);
+  ctx.fillStyle = '#fff'; ctx.fillRect(-1.3, 3.8, 0.1, 0.85);
+  ctx.fillStyle = redHi; ctx.fillRect(-2.25, 3.8, 0.12, 0.6);
+  ctx.fillStyle = '#111'; ctx.fillRect(-2.4, 3.55, 1.05, 0.12);
   // tank-top jersey, long torso leaning slightly back
-  ctx.fillStyle = red;
-  ctx.beginPath();
-  ctx.moveTo(-1.3, 1.9); ctx.lineTo(-1.55, 2.05); ctx.lineTo(-1.95, 2.0); ctx.lineTo(-2.15, 1.95);
-  ctx.lineTo(-2.45, 3.6); ctx.lineTo(-1.35, 3.65); ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.07; ctx.stroke();
-  ctx.font = 'bold 0.72px Arial Black, Arial, sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.lineWidth = 0.1; ctx.strokeStyle = '#fff'; ctx.strokeText('23', -1.88, 2.9);
-  ctx.fillStyle = '#111'; ctx.fillText('23', -1.88, 2.9);
+  shape([[-1.3, 1.9], [-1.55, 2.05], [-1.95, 2.0], [-2.15, 1.95], [-2.45, 3.6], [-1.35, 3.65]], red);
+  ctx.fillStyle = redHi; ctx.fillRect(-1.55, 2.2, 0.12, 1.3);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.08;
+  ctx.beginPath(); ctx.moveTo(-1.55, 2.05); ctx.lineTo(-1.95, 2.0); ctx.stroke();
+  ctx.font = `0.62px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 0.14; ctx.strokeStyle = '#fff'; ctx.strokeText('23', -1.9, 2.95);
+  ctx.fillStyle = '#111'; ctx.fillText('23', -1.9, 2.95);
   // neck + bald head, eyes on the ball
   limb([[-1.75, 1.95], [-1.6, 1.7]], 0.28, skin);
+  ctx.fillStyle = OUT;
+  ctx.beginPath(); ctx.ellipse(-1.5, 1.35, 0.41, 0.46, -0.3, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = skin;
   ctx.beginPath(); ctx.ellipse(-1.5, 1.35, 0.33, 0.38, -0.3, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(-1.75, 1.42, 0.09, 0, Math.PI * 2); ctx.fill();   // ear
-  ctx.fillStyle = '#1a0f08';
-  ctx.beginPath(); ctx.arc(-1.28, 1.22, 0.045, 0, Math.PI * 2); ctx.fill(); // eye
-  ctx.beginPath(); ctx.ellipse(-1.3, 1.55, 0.07, 0.05, 0, 0, Math.PI * 2); ctx.fill();
-  // near arm: stretched forward and down, wristband at the hand
-  limb([[-1.95, 2.15], [-1.15, 2.7], [-0.35, 3.05]], 0.32, skin);
-  limb([[-0.62, 2.95], [-0.45, 3.02]], 0.38, '#fff');
+  ctx.fillStyle = skinHi;
+  ctx.beginPath(); ctx.ellipse(-1.42, 1.12, 0.14, 0.09, -0.3, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = skin;
-  ctx.beginPath(); ctx.arc(-0.25, 3.08, 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-1.78, 1.42, 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1a0f08';
+  ctx.fillRect(-1.33, 1.2, 0.1, 0.08);
+  ctx.fillRect(-1.38, 1.52, 0.14, 0.1);
+  // near arm: stretched forward and down, wristband at the hand
+  limb([[-1.95, 2.15], [-1.15, 2.7], [-0.35, 3.05]], 0.32, skin, skinHi);
+  limb([[-0.62, 2.95], [-0.45, 3.02]], 0.38, '#fff');
 
   ctx.restore();
-  if (holding) drawBall(hx, hy, 0);
-  // fingers over the ball so it reads as palmed
-  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
-  if (holding) limb([[-0.28, 0.3], [-0.05, 0.36]], 0.16, skinBack);
-  ctx.restore();
+  if (holding) {
+    star(hx - R * 0.9, hy - R * 0.2, R * (1.4 + 0.5 * Math.sin(clock * 14)), 0.9);
+    drawBall(hx, hy, 0);
+    ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
+    limb([[-0.3, 0.28], [-0.05, 0.36]], 0.14, skinBack);   // fingers over the ball
+    ctx.restore();
+  }
 }
 
 function drawHUD() {
-  ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.font = `bold ${Math.round(Math.max(18, u * 0.7))}px Arial, sans-serif`;
-  ctx.fillText(`${makes} / ${shots}`, 16, 16);
-  ctx.font = `${Math.round(Math.max(13, u * 0.4))}px Arial, sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillText('Move to fly · click to drop the ball', 16, 16 + Math.max(24, u * 0.85));
+  const s = 8 * P;                                    // one "font pixel row" of 8 low-res px
+  // basketball badge, top-left, with points
+  ctx.fillStyle = OUT;
+  ctx.beginPath(); ctx.arc(9 * s * 0.5, 0, 5.6 * s * 0.5 + P, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#e8641c';
+  ctx.beginPath(); ctx.arc(9 * s * 0.5, 0, 5.6 * s * 0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = OUT; ctx.fillRect(0.6 * s, 1.55 * s, 7.8 * s * 0.5, P);
+  arcadeText(String(makes * 2), 4.5 * s, 0.4 * s, s, '#ffd23f', 'center');
+  arcadeText('PTS', 4.5 * s, 1.75 * s, s * 0.75, '#fff', 'center');
+
+  if (streak >= 3) {
+    if (Math.floor(clock * 6) % 2) arcadeText('ON FIRE', W - 0.6 * s, 0.6 * s, s, '#ff8c1a', 'right');
+  } else {
+    arcadeText(`${makes}/${shots}`, W - 0.6 * s, 0.6 * s, s, '#ffd23f', 'right');
+  }
+  if (W / P > 300) {
+    ctx.font = `${s}px ${FONT}`;
+    const tw = ctx.measureText('FREE PLAY').width;
+    ctx.fillStyle = '#0a2a6b'; ctx.fillRect(W / 2 - tw / 2 - P * 3, 0, tw + P * 6, s + P * 6);
+    ctx.fillStyle = '#4cc9f0'; ctx.fillRect(W / 2 - tw / 2 - P * 3, s + P * 5, tw + P * 6, P);
+    arcadeText('FREE PLAY', W / 2, P * 3, s, '#fff', 'center');
+  }
+  if (shots === 0) {
+    const a = 0.6 + 0.4 * Math.sin(clock * 4);
+    ctx.globalAlpha = a;
+    arcadeText(matchMedia('(pointer: coarse)').matches ? 'DRAG TO FLY - LIFT TO DROP' : 'MOVE TO FLY - CLICK TO DROP', W / 2, floorY + (H - floorY) / 2 - s * 0.3, Math.round(s * 0.5), '#fff', 'center');
+    ctx.globalAlpha = 1;
+  }
 
   for (const p of popups) {
-    ctx.globalAlpha = Math.max(0, 1 - p.t);
-    ctx.fillStyle = '#ffd23f'; ctx.textAlign = 'center';
-    ctx.font = `bold ${Math.round(u * 0.9)}px Arial Black, Arial, sans-serif`;
-    ctx.fillText(p.text, p.x, p.y - p.t * u * 1.5);
+    const size = s * (p.text.length > 6 ? 1.3 : 1.6) * Math.min(1, 0.4 + p.t * 5);
+    ctx.font = `${size}px ${FONT}`;
+    const half = ctx.measureText(p.text).width / 2;
+    const x = Math.min(Math.max(p.x, half + s * 0.5), W - half - s * 0.5);
+    ctx.globalAlpha = Math.max(0, 1.3 - p.t);
+    arcadeText(p.text, x, p.y - p.t * u, size, p.text === 'ON FIRE!' ? '#ff8c1a' : '#ffd23f', 'center');
     ctx.globalAlpha = 1;
+  }
+}
+
+function emitFire(x, y) {
+  for (let i = 0; i < 2; i++) {
+    sparks.push({ x: x + (Math.random() - 0.5) * R, y: y + (Math.random() - 0.5) * R,
+                  vx: (Math.random() - 0.5) * 2 * u, vy: -(2 + Math.random() * 3) * u, t: 0 });
+  }
+}
+function drawSparks() {
+  const cols = ['#fff3b0', '#ffd23f', '#ff8c1a', '#e63946', '#6a040f'];
+  for (const s of sparks) {
+    const k = Math.min(cols.length - 1, Math.floor(s.t / 0.1));
+    ctx.fillStyle = cols[k];
+    const size = P * (3 - k * 0.4);
+    ctx.fillRect(s.x - size / 2, s.y - size / 2, size, size);
   }
 }
 
@@ -291,21 +446,33 @@ function drawHUD() {
 let last = performance.now();
 function frame(now) {
   const dt = Math.min((now - last) / 1000, 1 / 30); last = now;
+  clock += dt;
 
   if (!hasBall) { cooldown -= dt; if (cooldown <= 0) hasBall = true; }
   for (const b of balls) {
     b.life += dt;
-    const sub = 4;
-    for (let i = 0; i < sub; i++) step(b, dt / sub);
+    for (let i = 0; i < 4; i++) step(b, dt / 4);
+    if (b.fire && b.life < 3) emitFire(b.x, b.y);
   }
+  if (hasBall && streak >= 3) emitFire(mx, my);
   balls = balls.filter(b => b.life < 8 && b.x < W + 4 * R);
+  for (const s of sparks) { s.t += dt; s.x += s.vx * dt; s.y += s.vy * dt; }
+  sparks = sparks.filter(s => s.t < 0.5);
   popups.forEach(p => p.t += dt);
-  popups = popups.filter(p => p.t < 1);
+  popups = popups.filter(p => p.t < 1.3);
   netSway = Math.max(0, netSway - dt * 1.2);
+  if (Math.random() < 0.3) flashes.push({ x: Math.random() * W, y: Math.random() * (floorY - 1.4 * u), t: 0 });
+  flashes.forEach(f => f.t += dt);
+  flashes = flashes.filter(f => f.t < 0.1);
 
-  drawCourt();
+  ctx.drawImage(bg, 0, 0, bg.width * P, bg.height * P);
+  for (const f of flashes) star(f.x, f.y, 0.45 * u, 1 - f.t * 8);
   drawHoop();
+  drawShadow(mx - 1.8 * u, floorY - my - 6 * u);
+  for (const b of balls) drawShadow(b.x, floorY - b.y);
   for (const b of balls) drawBall(b.x, b.y, b.rot);
+  drawRimAndNet();
+  drawSparks();
   drawPlayer(mx, my, hasBall);
   drawHUD();
   requestAnimationFrame(frame);
