@@ -2,9 +2,299 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Hello</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dunk</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
+    canvas { display: block; cursor: none; touch-action: none; }
+  </style>
 </head>
 <body>
-  <h1>Hello, I'm Kevin Hoffman</h1>
+<canvas id="c"></canvas>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+
+let W, H, u, R, floorY, rimY, bbX, rimF, rimB, poleX;
+
+function layout() {
+  const dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  c.width = W * dpr; c.height = H * dpr;
+  c.style.width = W + 'px'; c.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  floorY = H * 0.88;
+  u = Math.min(floorY / 13.5, W / 20);   // 1 u ≈ 1 foot
+  R = 0.42 * u;                           // ball radius
+  rimY = floorY - 10 * u;                 // 10 ft rim
+  bbX = W - Math.max(3 * u, W * 0.1);     // backboard front face
+  rimB = bbX - 0.5 * u;                   // back of rim
+  rimF = rimB - 1.5 * u;                  // front of rim
+  poleX = bbX + 2.4 * u;
+}
+layout();
+addEventListener('resize', layout);
+
+// ---------- input ----------
+let mx = W * 0.35, my = H * 0.4;
+let history = [];
+let hasBall = true, cooldown = 0;
+let balls = [], popups = [];
+let makes = 0, shots = 0, netSway = 0;
+
+function clampHand() {
+  my = Math.min(my, floorY - 5.9 * u);
+  my = Math.max(my, R);
+  mx = Math.max(3 * u, Math.min(W - R, mx));
+}
+function track(e) {
+  mx = e.clientX; my = e.clientY; clampHand();
+  const now = performance.now();
+  history.push({ x: mx, y: my, t: now });
+  while (history.length && now - history[0].t > 90) history.shift();
+}
+function drop() {
+  if (!hasBall) return;
+  let vx = 0, vy = 0;
+  const now = performance.now();
+  while (history.length && now - history[0].t > 90) history.shift();
+  if (history.length > 1) {
+    const a = history[0], b = history[history.length - 1];
+    const dt = Math.max((b.t - a.t) / 1000, 0.016);
+    vx = (b.x - a.x) / dt; vy = (b.y - a.y) / dt;
+    const max = 40 * u, sp = Math.hypot(vx, vy);
+    if (sp > max) { vx *= max / sp; vy *= max / sp; }
+  }
+  balls.push({ x: mx, y: my, vx, vy, rot: 0, life: 0, scored: false });
+  if (balls.length > 12) balls.shift();
+  shots++;
+  hasBall = false; cooldown = 0.4;
+}
+c.addEventListener('pointermove', track);
+c.addEventListener('pointerdown', e => {
+  track(e);
+  if (e.pointerType === 'mouse') drop();
+});
+c.addEventListener('pointerup', e => {
+  if (e.pointerType !== 'mouse') drop();
+});
+
+// ---------- physics ----------
+function bounceOffPoint(b, px, py, rad, e) {
+  const dx = b.x - px, dy = b.y - py, d = Math.hypot(dx, dy), min = R + rad;
+  if (d >= min || d === 0) return false;
+  const nx = dx / d, ny = dy / d;
+  b.x = px + nx * min; b.y = py + ny * min;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0) { b.vx -= (1 + e) * vn * nx; b.vy -= (1 + e) * vn * ny; }
+  return true;
+}
+function bounceOffRect(b, x0, y0, x1, y1, e) {
+  const cx = Math.max(x0, Math.min(b.x, x1)), cy = Math.max(y0, Math.min(b.y, y1));
+  if (cx === b.x && cy === b.y) { b.x = x0 - R; b.vx = -Math.abs(b.vx) * e; return true; }
+  return bounceOffPoint(b, cx, cy, 0, e);
+}
+function step(b, dt) {
+  const prevY = b.y;
+  b.vy += 32 * u * dt;
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  b.rot += b.vx * dt / R;
+
+  if (bounceOffPoint(b, rimF, rimY, 0.09 * u, 0.55)) b.touched = true;
+  if (bounceOffPoint(b, rimB, rimY, 0.09 * u, 0.55)) b.touched = true;
+  if (bounceOffRect(b, bbX, rimY - 2.9 * u, bbX + 0.25 * u, rimY + 0.6 * u, 0.65)) b.touched = true;
+  bounceOffRect(b, poleX - 0.3 * u, rimY - 2.3 * u, poleX + 0.3 * u, floorY, 0.5);
+
+  if (b.y > floorY - R) {
+    b.y = floorY - R;
+    if (b.vy > 0) b.vy = -b.vy * 0.62;
+    b.vx *= 0.9;
+    if (Math.abs(b.vy) < 2 * u) b.vy = 0;
+  }
+  if (b.x < R) { b.x = R; b.vx = Math.abs(b.vx) * 0.6; }
+
+  if (!b.scored && prevY < rimY && b.y >= rimY && b.vy > 0 && b.x > rimF && b.x < rimB) {
+    b.scored = true; makes++; netSway = 1;
+    popups.push({ x: (rimF + rimB) / 2, y: rimY - 1.5 * u, t: 0, text: b.touched ? '2 PTS' : 'SWISH!' });
+  }
+}
+
+// ---------- drawing ----------
+function drawCourt() {
+  const sky = ctx.createLinearGradient(0, 0, 0, floorY);
+  sky.addColorStop(0, '#0d1026'); sky.addColorStop(1, '#2a1e3d');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, floorY);
+
+  // arena lights
+  for (let i = 0; i < 6; i++) {
+    const lx = (i + 0.5) * W / 6;
+    const g = ctx.createRadialGradient(lx, 0, 0, lx, 0, u * 5);
+    g.addColorStop(0, 'rgba(255,240,200,0.35)'); g.addColorStop(1, 'rgba(255,240,200,0)');
+    ctx.fillStyle = g; ctx.fillRect(lx - u * 5, 0, u * 10, u * 5);
+  }
+  // crowd band
+  ctx.fillStyle = '#1a1428';
+  ctx.fillRect(0, floorY - 3.2 * u, W, 3.2 * u);
+  for (let i = 0; i < W / (0.7 * u); i++) {
+    const hx = i * 0.7 * u + (i % 2) * 0.2 * u, hy = floorY - 2.6 * u + (i % 3) * 0.35 * u;
+    ctx.fillStyle = ['#3b2f4f', '#45355c', '#302642'][i % 3];
+    ctx.beginPath(); ctx.arc(hx, hy, 0.28 * u, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(hx - 0.33 * u, hy + 0.25 * u, 0.66 * u, 2 * u);
+  }
+  // floor
+  const wood = ctx.createLinearGradient(0, floorY, 0, H);
+  wood.addColorStop(0, '#d9a25f'); wood.addColorStop(1, '#a8703a');
+  ctx.fillStyle = wood; ctx.fillRect(0, floorY, W, H - floorY);
+  ctx.strokeStyle = 'rgba(90,50,20,0.25)'; ctx.lineWidth = 1;
+  for (let y = floorY + 0.35 * u; y < H; y += 0.35 * u) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, floorY, W, 2);
+  ctx.fillRect(bbX + 0.1 * u, floorY, 3, H - floorY); // baseline
+}
+
+function drawHoop() {
+  // stanchion
+  ctx.fillStyle = '#2b2f36';
+  ctx.fillRect(poleX - 0.9 * u, floorY - 1.2 * u, 2.2 * u, 1.2 * u);
+  ctx.fillStyle = '#c8102e';
+  ctx.fillRect(poleX - 0.3 * u, rimY - 2.3 * u, 0.6 * u, floorY - rimY + 1.1 * u);
+  ctx.fillStyle = '#3a3f47';
+  ctx.fillRect(bbX + 0.25 * u, rimY - 1.6 * u, poleX - bbX, 0.3 * u);
+  // backboard (edge-on)
+  ctx.fillStyle = 'rgba(230,240,255,0.9)';
+  ctx.fillRect(bbX, rimY - 2.9 * u, 0.25 * u, 3.5 * u);
+  ctx.fillStyle = '#c8102e';
+  ctx.fillRect(bbX, rimY - 1.5 * u, 0.25 * u, 1.5 * u);
+  // net
+  const sway = Math.sin(netSway * 12) * netSway * 0.35 * u;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+  const nb = rimY + 1.6 * u, inset = 0.35 * u;
+  for (let i = 0; i <= 5; i++) {
+    const tx = rimF + (rimB - rimF) * i / 5;
+    const bx = rimF + inset + (rimB - rimF - 2 * inset) * (5 - i) / 5 + sway;
+    ctx.beginPath(); ctx.moveTo(tx, rimY); ctx.lineTo(bx, nb); ctx.stroke();
+  }
+  for (let k = 1; k <= 3; k++) {
+    const y = rimY + (nb - rimY) * k / 3, ins = inset * k / 3, s = sway * k / 3;
+    ctx.beginPath(); ctx.moveTo(rimF + ins + s, y); ctx.lineTo(rimB - ins + s, y); ctx.stroke();
+  }
+  // rim
+  ctx.strokeStyle = '#ff5a1f'; ctx.lineWidth = 0.18 * u; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(rimF, rimY); ctx.lineTo(bbX, rimY); ctx.stroke();
+}
+
+function drawBall(x, y, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.fillStyle = '#e8671c';
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#3a1a08'; ctx.lineWidth = Math.max(1.2, R * 0.08);
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-R, 0); ctx.lineTo(R, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -R); ctx.lineTo(0, R); ctx.stroke();
+  ctx.beginPath(); ctx.arc(-R * 1.25, 0, R * 0.85, -0.9, 0.9); ctx.stroke();
+  ctx.beginPath(); ctx.arc(R * 1.25, 0, R * 0.85, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
+  ctx.restore();
+}
+
+function limb(pts, w, color) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+function shoe(x, y, ang) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.fillStyle = '#f4f4f4';
+  ctx.beginPath(); ctx.ellipse(0.2, 0, 0.42, 0.2, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#c8102e';
+  ctx.beginPath(); ctx.ellipse(0.05, -0.05, 0.25, 0.12, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+// Player in a dunk pose, facing right. Origin = the ball in his raised hand; 1 unit = 1 u.
+function drawPlayer(hx, hy, holding) {
+  const skin = '#7a4a2a', skinBack = '#5c3620', red = '#c8102e', redBack = '#9a0c23';
+  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
+
+  // back arm, stretched behind for balance
+  limb([[-1.55, 2.25], [-2.3, 2.6], [-2.85, 2.1]], 0.3, skinBack);
+  // legs
+  limb([[-1.8, 4.0], [-2.2, 4.85], [-3.0, 4.95]], 0.36, skinBack);
+  shoe(-3.05, 5.0, 0.3);
+  limb([[-1.3, 4.0], [-0.7, 4.7], [-1.05, 5.55]], 0.38, skin);
+  shoe(-1.0, 5.65, 0.9);
+  // shorts
+  ctx.fillStyle = red;
+  ctx.beginPath();
+  ctx.moveTo(-2.1, 3.7); ctx.lineTo(-1.15, 3.8); ctx.lineTo(-0.75, 4.55);
+  ctx.lineTo(-1.45, 4.75); ctx.lineTo(-1.8, 4.3); ctx.lineTo(-2.45, 4.6); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.06; ctx.stroke();
+  // torso / jersey
+  ctx.fillStyle = red;
+  ctx.beginPath();
+  ctx.moveTo(-0.85, 2.1); ctx.lineTo(-1.65, 2.05); ctx.lineTo(-2.05, 3.85); ctx.lineTo(-1.15, 3.95); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 0.6px Arial Black, Arial, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('23', -1.43, 3.0);
+  // neck + head
+  limb([[-1.25, 2.1], [-1.15, 1.8]], 0.28, skin);
+  ctx.fillStyle = skin;
+  ctx.beginPath(); ctx.arc(-1.1, 1.45, 0.38, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-1.38, 1.5, 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1a0f08';
+  ctx.beginPath(); ctx.arc(-0.9, 1.33, 0.05, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(-0.85, 1.62, 0.08, 0.06, 0, 0, Math.PI * 2); ctx.fill();
+  // front arm, raised to the ball
+  limb([[-0.9, 2.25], [-0.35, 1.3], [0.02, 0.5]], 0.32, skin);
+  limb([[-0.17, 0.95], [-0.1, 0.8]], 0.36, '#fff'); // wristband
+
+  ctx.restore();
+  if (holding) drawBall(hx, hy, 0);
+}
+
+function drawHUD() {
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.font = `bold ${Math.round(Math.max(18, u * 0.7))}px Arial, sans-serif`;
+  ctx.fillText(`${makes} / ${shots}`, 16, 16);
+  ctx.font = `${Math.round(Math.max(13, u * 0.4))}px Arial, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText('Move to fly · click to drop the ball', 16, 16 + Math.max(24, u * 0.85));
+
+  for (const p of popups) {
+    ctx.globalAlpha = Math.max(0, 1 - p.t);
+    ctx.fillStyle = '#ffd23f'; ctx.textAlign = 'center';
+    ctx.font = `bold ${Math.round(u * 0.9)}px Arial Black, Arial, sans-serif`;
+    ctx.fillText(p.text, p.x, p.y - p.t * u * 1.5);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30); last = now;
+
+  if (!hasBall) { cooldown -= dt; if (cooldown <= 0) hasBall = true; }
+  for (const b of balls) {
+    b.life += dt;
+    const sub = 4;
+    for (let i = 0; i < sub; i++) step(b, dt / sub);
+  }
+  balls = balls.filter(b => b.life < 8 && b.x < W + 4 * R);
+  popups.forEach(p => p.t += dt);
+  popups = popups.filter(p => p.t < 1);
+  netSway = Math.max(0, netSway - dt * 1.2);
+
+  drawCourt();
+  drawHoop();
+  for (const b of balls) drawBall(b.x, b.y, b.rot);
+  drawPlayer(mx, my, hasBall);
+  drawHUD();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
 </body>
 </html>
