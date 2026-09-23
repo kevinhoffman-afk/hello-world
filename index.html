@@ -447,12 +447,6 @@ function drawHead(x, y, tilt) {
   ctx.fillStyle = OUT; ctx.beginPath(); ctx.ellipse(-0.1, 0.05, 0.1, 0.14, 0.15, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = SKIN.base; ctx.beginPath(); ctx.ellipse(-0.1, 0.05, 0.07, 0.11, 0.15, 0, Math.PI * 2); ctx.fill();
   line([[-0.08, -0.02], [-0.12, 0.05], [-0.09, 0.1]], SKIN.dark, 0.025);
-  ctx.lineWidth = 0.055; ctx.strokeStyle = OUT;                        // gold hoop earring
-  ctx.beginPath(); ctx.arc(-0.11, 0.23, 0.08, -1.2, 4.3); ctx.stroke();
-  ctx.lineWidth = 0.032; ctx.strokeStyle = '#f2c230';
-  ctx.beginPath(); ctx.arc(-0.11, 0.23, 0.08, -1.2, 4.3); ctx.stroke();
-  ctx.strokeStyle = '#fff3b0'; ctx.lineWidth = 0.012;
-  ctx.beginPath(); ctx.arc(-0.11, 0.23, 0.08, 2.4, 3.4); ctx.stroke();
   // brow + eye looking up at the ball
   line([[0.19, -0.105], [0.335, -0.09]], '#140a05', 0.04);
   ctx.fillStyle = '#efe6dc';
@@ -504,17 +498,19 @@ const TAKEOFF = { torso: -1.55, head: -1.35, tilt: -0.1, fu: -1.1, ff: -1.2, nu:
 const POSE_KEYS = Object.keys(DUNK);
 const REACH_TURN = 1.06, LEAN = 0.3;
 
-// Running stride (phase ph, amount k 0..1) while dribbling with the ball arm.
+// Driving dribble (phase ph, amount k 0..1): chest over the ball, knees bent low,
+// head up; ball arm pumps the ball low at his side while the other arm stays bent
+// up and out to protect it.
 function runPose(ph, k, dribble, holding) {
   const D = Math.PI / 2, s = Math.sin(ph), c = Math.cos(ph);
-  const torso = -1.5 + 0.18 * k;
-  const nth = D - 0.12 - 0.6 * k * s, fth = D + 0.12 + 0.6 * k * s;
-  const nsh = nth + 0.35 + 1.2 * k * Math.max(0, c), fsh = fth + 0.35 + 1.2 * k * Math.max(0, -c);
-  const nu = D + 0.1 + 0.75 * k * s;                          // arms swing against the legs
-  const fu = holding ? D - 0.55 : D + 0.1 - 0.75 * k * s;
-  const ff = holding ? D - 0.3 - 0.25 * Math.cos(dribble) : fu - 1.4;
-  return { torso, head: torso - 0.08, tilt: -0.05, fu, ff, nu, nf: nu - 1.4,
-           nth, nsh, nshoe: nsh - D - 0.1, fth, fsh, fshoe: fsh - D - 0.1 };
+  const torso = -1.18 + 0.08 * k;
+  const nth = D - 0.42 - 0.55 * k * s, fth = D + 0.02 + 0.55 * k * s;
+  const nsh = nth + 0.8 + 0.9 * k * Math.max(0, c), fsh = fth + 0.8 + 0.9 * k * Math.max(0, -c);
+  const nu = 2.45 + 0.25 * k * s, nf = 1.05 + 0.2 * k * s;              // guard arm, elbow back
+  const fu = holding ? D - 0.3 : D + 0.1 - 0.75 * k * s;
+  const ff = holding ? D - 0.05 - 0.22 * Math.cos(dribble) : fu - 1.4;
+  return { torso, head: -1.42, tilt: -0.12, fu, ff, nu, nf,
+           nth, nsh, nshoe: nsh - D - 0.15, fth, fsh, fshoe: fsh - D - 0.1 };
 }
 function blendPose(a, b, t) {
   const o = {};
@@ -587,8 +583,8 @@ function drawJersey(j, p) {
   ctx.strokeStyle = '#fff'; ctx.lineCap = 'round';                                     // collar trim
   ctx.lineWidth = 0.06;
   ctx.beginPath(); ctx.moveTo(...P(-0.2, 2.01)); ctx.quadraticCurveTo(...P(0.02, 1.82), ...P(0.24, 1.88)); ctx.stroke();
-  ctx.lineWidth = 0.045;                                                                  // armhole trim
-  ctx.beginPath(); ctx.moveTo(...P(0.37, 1.98)); ctx.quadraticCurveTo(...P(0.58, 1.88), ...P(0.59, 1.35)); ctx.stroke();
+  ctx.lineWidth = 0.045;                                                                  // far armhole
+  ctx.beginPath(); ctx.moveTo(...P(0.3, 2.0)); ctx.quadraticCurveTo(...P(0.56, 1.92), ...P(0.58, 1.4)); ctx.stroke();
   line([P(0.42, 0.8), P(-0.12, 0.77)], RED_DARK, 0.03);                                // folds
   line([P(0.36, 0.63), P(-0.28, 0.61)], RED_DARK, 0.025);
   const n = P(0.07, 1.15);
@@ -681,6 +677,17 @@ function drawShorts(j) {
   ctx.restore();
 }
 
+// Tank-top armhole around a shoulder: a band of jersey with white piping that the
+// arm comes out of, the top of it being the strap over the shoulder.
+function armhole(sh, torso, behind) {
+  ctx.save(); ctx.translate(sh[0], sh[1]); ctx.rotate(torso + Math.PI / 2);
+  ctx.fillStyle = behind ? RED_DARK : RED; ctx.strokeStyle = OUT; ctx.lineWidth = 0.06;
+  ctx.beginPath(); ctx.ellipse(0.03, 0.1, 0.33, 0.35, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.05;
+  ctx.beginPath(); ctx.ellipse(0.03, 0.1, 0.27, 0.29, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
 function drawPlayer() {
   const j = J, p = pose;
   const onBall = hasBall && Math.hypot(ballL[0] - j.ball[0], ballL[1] - j.ball[1]) < 0.12;
@@ -694,6 +701,7 @@ function drawPlayer() {
   drawJersey(j, p);
   drawShorts(j);
   drawHead(j.headC[0], j.headC[1], p.tilt);
+  armhole(j.sN, p.torso, false);
   arm(j.sN, j.eN, j.wN, SKIN);
   handOpen(j.wN, p.nf, SKIN, true);
   ctx.restore();
