@@ -569,12 +569,26 @@ function handOpen(w, ang, tone, band) {
 const RED = '#d91a2c', RED_DARK = '#a50d22', RED_HI = '#f2465a';
 function drawJersey(j, p) {
   const P = j.at;
-  poly([P(0.55, 2.07), P(0.35, 1.92), P(0.05, 1.9), P(-0.3, 2.02), P(-0.47, 0.45), P(0.42, 0.41), P(0.6, 1.27)], RED, OUT, 0.09);
-  poly([P(-0.3, 2.0), P(-0.12, 1.9), P(-0.26, 0.45), P(-0.45, 0.47)], RED_DARK, null);
+  // tank top: back strap, collar scooping under the front of the neck, front strap, armhole
+  const body = () => {
+    const pts = [P(-0.44, 1.96), P(-0.2, 2.03)];
+    ctx.beginPath(); ctx.moveTo(...P(-0.47, 0.45)); ctx.lineTo(...pts[0]); ctx.lineTo(...pts[1]);
+    ctx.quadraticCurveTo(...P(0.02, 1.84), ...P(0.24, 1.9));
+    ctx.lineTo(...P(0.36, 2.0));
+    ctx.quadraticCurveTo(...P(0.6, 1.9), ...P(0.6, 1.27));
+    ctx.lineTo(...P(0.42, 0.41)); ctx.closePath();
+  };
+  body(); ctx.fillStyle = RED; ctx.fill();
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.09; ctx.lineJoin = 'round'; ctx.stroke();
+  poly([P(-0.43, 1.97), P(-0.25, 2.01), P(-0.28, 0.45), P(-0.45, 0.47)], RED_DARK, null);
   const hc = P(0.38, 1.57);
   ctx.fillStyle = RED_HI;
   ctx.beginPath(); ctx.ellipse(hc[0], hc[1], 0.1, 0.28, p.torso - Math.PI / 2, 0, Math.PI * 2); ctx.fill();
-  line([P(0.55, 2.06), P(0.35, 1.91), P(0.05, 1.89), P(-0.28, 2.0)], '#fff', 0.06);   // neck trim
+  ctx.strokeStyle = '#fff'; ctx.lineCap = 'round';                                     // collar trim
+  ctx.lineWidth = 0.06;
+  ctx.beginPath(); ctx.moveTo(...P(-0.2, 2.01)); ctx.quadraticCurveTo(...P(0.02, 1.82), ...P(0.24, 1.88)); ctx.stroke();
+  ctx.lineWidth = 0.045;                                                                  // armhole trim
+  ctx.beginPath(); ctx.moveTo(...P(0.37, 1.98)); ctx.quadraticCurveTo(...P(0.58, 1.88), ...P(0.59, 1.35)); ctx.stroke();
   line([P(0.42, 0.8), P(-0.12, 0.77)], RED_DARK, 0.03);                                // folds
   line([P(0.36, 0.63), P(-0.28, 0.61)], RED_DARK, 0.025);
   const n = P(0.07, 1.15);
@@ -584,50 +598,87 @@ function drawJersey(j, p) {
   ctx.fillStyle = '#111'; ctx.fillText('23', 0, 0);
   ctx.restore();
 }
-// One baggy shorts leg hanging off the hip toward the knee, so it swings with the thigh.
-// Classic side design: a diamond panel (black / red / black borders, white centre)
-// rising from a striped hem band. `far` draws it in shadow for the leg behind.
+// Shorts are soft fabric: each leg is a baggy curved panel hanging off the hip toward
+// the knee, so it swings with the thigh, and its hem ripples with the stride (and
+// flutters in the air). Pieces share one outline so they read as one garment.
 function shortsLeg(j, h, k, far) {
   const d = [(k[0] - h[0]) / THIGH, (k[1] - h[1]) / THIGH];
   let n = [-d[1], d[0]];
   if (n[0] * j.fwd[0] + n[1] * j.fwd[1] < 0) n = [-n[0], -n[1]];            // n points forward
-  const top = add(h, [-d[0] * 0.25, -d[1] * 0.25]), hem = add(h, [d[0] * 0.82, d[1] * 0.82]);
   const off = (p, w) => [p[0] + n[0] * w, p[1] + n[1] * w];
   const along = (p, t) => [p[0] + d[0] * t, p[1] + d[1] * t];
+  const top = along(h, -0.25), hem = along(h, 0.82);
+  const ph = far ? 1.7 : 0;
+  const rip = 0.06 * stride * Math.sin(gait * 2 + ph) + 0.04 * air * Math.sin(clock * 9 + ph);
+  const tf = off(top, 0.36), tb = off(top, -0.36), hf = off(hem, 0.43), hb = off(hem, -0.43);
+  const mf = off(along(mix(top, hem, 0.55), 0.02), 0.5), mb = off(along(mix(top, hem, 0.55), 0.02), -0.5);
+  const hc = off(along(hem, 0.07 + rip), rip * 1.5);                        // hem sag + ripple
+  const path = () => {
+    ctx.beginPath(); ctx.moveTo(...tf);
+    ctx.quadraticCurveTo(...mf, ...hf); ctx.quadraticCurveTo(...hc, ...hb); ctx.quadraticCurveTo(...mb, ...tb);
+    ctx.closePath();
+  };
+  return { far, d, n, off, along, top, hem, hc, hf, hb, path };
+}
+function outlineThenFill(paths, fill) {
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.1; ctx.lineJoin = 'round';
+  for (const p of paths) { p(); ctx.stroke(); }
+  ctx.fillStyle = fill;
+  for (const p of paths) { p(); ctx.fill(); }
+}
+// Fabric shading, folds, then the diamond side panel and striped hem.
+function shortsDetail(L) {
+  const { far, off, along, top, hem, hc, hf, hb } = L;
   const red = far ? RED_DARK : RED, white = far ? '#c4c0c8' : '#f4f4f4', black = '#111';
-  const shape = [off(top, 0.36), off(hem, 0.41), off(hem, -0.41), off(top, -0.36)];
-  poly(shape, red, OUT, 0.08);
-
-  ctx.save();
-  ctx.beginPath(); shape.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
-  ctx.clip();
-  line([off(mix(top, hem, 0.2), -0.12), off(mix(top, hem, 0.55), -0.05)], far ? '#7d0919' : RED_DARK, 0.03); // fold
-  // diamond panel, its lower half tucked behind the hem band
+  ctx.save(); L.path(); ctx.clip();
+  line([off(top, -0.32), off(hem, -0.36)], 'rgba(70,0,12,0.28)', 0.18);              // shadow side
+  line([off(top, 0.18), off(hem, 0.26)], 'rgba(255,150,160,0.18)', 0.1);             // sheen
+  ctx.strokeStyle = 'rgba(70,0,12,0.35)'; ctx.lineWidth = 0.025; ctx.lineCap = 'round';
+  for (const w of [-0.12, 0.12]) {                                                    // soft folds
+    ctx.beginPath(); ctx.moveTo(...off(along(top, 0.25), w));
+    ctx.quadraticCurveTo(...off(along(top, 0.55), w + 0.07), ...off(along(hem, -0.35), w * 0.6)); ctx.stroke();
+  }
   const c = along(hem, -0.3);
   const diamond = s => [along(c, -0.5 * s), off(c, 0.4 * s), along(c, 0.5 * s), off(c, -0.4 * s)];
   poly(diamond(1), black, null);
   poly(diamond(0.86), red, null);
   poly(diamond(0.76), black, null);
   poly(diamond(0.68), white, null);
-  // striped hem band: white, black, red, black
-  const band = (t, w, col) => line([off(along(hem, t), 0.5), off(along(hem, t), -0.5)], col, w);
+  // hem band follows the rippling hem curve
+  const band = (t, w, col) => {
+    ctx.strokeStyle = col; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(...along(off(hf, 0.1), t));
+    ctx.quadraticCurveTo(...along(hc, t), ...along(off(hb, -0.1), t)); ctx.stroke();
+  };
   band(-0.13, 0.09, white);
   band(-0.075, 0.03, black);
   band(-0.042, 0.04, red);
   band(-0.012, 0.03, black);
   ctx.restore();
-  ctx.strokeStyle = OUT; ctx.lineWidth = 0.08; ctx.lineJoin = 'round';
-  ctx.beginPath(); shape.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
-  ctx.stroke();
+}
+function drawFarShortsLeg(j) {
+  const L = shortsLeg(j, j.hF, j.kF, true);
+  outlineThenFill([L.path], RED_DARK);
+  shortsDetail(L);
 }
 function drawShorts(j) {
   const P = j.at;
-  poly([P(0.47, 0.55), P(-0.52, 0.5), P(-0.56, -0.1), P(0.0, -0.42), P(0.52, -0.1)], RED, OUT, 0.08);
-  shortsLeg(j, j.hN, j.kN, false);
+  const seat = () => {
+    ctx.beginPath(); ctx.moveTo(...P(0.49, 0.6)); ctx.lineTo(...P(-0.54, 0.55));
+    ctx.quadraticCurveTo(...P(-0.64, 0.1), ...P(-0.5, -0.22));
+    ctx.quadraticCurveTo(...P(0, -0.52), ...P(0.5, -0.22));
+    ctx.quadraticCurveTo(...P(0.6, 0.2), ...P(0.49, 0.6));
+    ctx.closePath();
+  };
+  const L = shortsLeg(j, j.hN, j.kN, false);
+  outlineThenFill([seat, L.path], RED);
+  shortsDetail(L);
   // elastic waistband with stitching
-  poly([P(-0.53, 0.62), P(0.49, 0.66), P(0.49, 0.45), P(-0.53, 0.41)], '#c8142a', OUT, 0.06);
-  line([P(-0.5, 0.56), P(0.46, 0.6)], RED_DARK, 0.018);
-  line([P(-0.5, 0.47), P(0.46, 0.51)], RED_DARK, 0.018);
+  ctx.save(); seat(); ctx.clip();
+  poly([P(-0.6, 0.64), P(0.55, 0.68), P(0.55, 0.45), P(-0.6, 0.41)], '#c8142a', null);
+  line([P(-0.55, 0.56), P(0.5, 0.6)], RED_DARK, 0.018);
+  line([P(-0.55, 0.47), P(0.5, 0.51)], RED_DARK, 0.018);
+  ctx.restore();
 }
 
 function drawPlayer() {
@@ -637,11 +688,11 @@ function drawPlayer() {
   arm(j.sF, j.eF, j.wF, SKIN_FAR);                                               // ball arm
   if (!onBall) handOpen(j.wF, p.ff, SKIN_FAR, false);
   leg(j.hF, j.kF, j.aF, p.fshoe, SKIN_FAR);
-  shortsLeg(j, j.hF, j.kF, true);
+  drawFarShortsLeg(j);
   leg(j.hN, j.kN, j.aN, p.nshoe, SKIN);
+  limb([[...j.neck, 0.16], [...mix(j.neck, j.headC, 0.6), 0.15]], SKIN);         // neck
   drawJersey(j, p);
   drawShorts(j);
-  limb([[...j.neck, 0.16], [...mix(j.neck, j.headC, 0.6), 0.15]], SKIN);         // neck
   drawHead(j.headC[0], j.headC[1], p.tilt);
   arm(j.sN, j.eN, j.wN, SKIN);
   handOpen(j.wN, p.nf, SKIN, true);
