@@ -9,14 +9,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
-    canvas { display: block; cursor: none; touch-action: none; image-rendering: pixelated; }
+    body { cursor: none; }
+    canvas { display: block; touch-action: none; image-rendering: pixelated; }
+    #s { position: absolute; top: 0; left: 0; pointer-events: none; }
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="s"></canvas>
 <script>
 const c = document.getElementById('c');
-const ctx = c.getContext('2d');
+const mainCtx = c.getContext('2d');
+const sp = document.getElementById('s');        // finer-pixel layer for the player
+const spriteCtx = sp.getContext('2d');
+let ctx = mainCtx;
 const bg = document.createElement('canvas');   // static arena, painted once per resize
 const bctx = bg.getContext('2d');
 const FONT = '"Press Start 2P", monospace';
@@ -24,7 +30,7 @@ const OUT = '#1a0a05';                          // sprite outline
 
 // Everything is drawn in screen pixels onto a canvas 1/P the size, then scaled up
 // with no smoothing: that's what gives the chunky arcade-sprite look.
-let W, H, P, u, R, floorY, rimY, bbX, rimF, rimB, poleX;
+let W, H, P, PS, PX, u, R, floorY, rimY, bbX, rimF, rimB, poleX;
 
 function layout() {
   W = innerWidth; H = innerHeight;
@@ -37,6 +43,11 @@ function layout() {
   ctx.setTransform(1 / P, 0, 0, 1 / P, 0, 0);
   bctx.setTransform(1 / P, 0, 0, 1 / P, 0, 0);
   ctx.imageSmoothingEnabled = false;
+  PS = Math.max(1, Math.round(P / 2));
+  sp.width = Math.ceil(W / PS); sp.height = Math.ceil(H / PS);
+  sp.style.width = W + 'px'; sp.style.height = H + 'px';
+  spriteCtx.setTransform(1 / PS, 0, 0, 1 / PS, 0, 0);
+  PX = P;
   R = 0.42 * u;                           // ball radius
   rimY = floorY - 10 * u;                 // 10 ft rim
   bbX = W - Math.max(3.4 * u, W * 0.1);   // backboard front face
@@ -283,10 +294,10 @@ function drawShadow(x, height) {
 function drawBall(x, y, rot) {
   ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
   ctx.fillStyle = OUT;
-  ctx.beginPath(); ctx.arc(0, 0, R + P, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, R + PX, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#f07a1f';
   ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = OUT; ctx.lineWidth = P;
+  ctx.strokeStyle = OUT; ctx.lineWidth = PX;
   ctx.beginPath(); ctx.moveTo(-R, 0); ctx.lineTo(R, 0); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, -R); ctx.lineTo(0, R); ctx.stroke();
   ctx.beginPath(); ctx.arc(-R * 1.25, 0, R * 0.85, -0.9, 0.9); ctx.stroke();
@@ -296,93 +307,203 @@ function drawBall(x, y, rot) {
   ctx.beginPath(); ctx.arc(x - R * 0.4, y - R * 0.4, R * 0.25, 0, Math.PI * 2); ctx.fill();
 }
 
-// Limbs are thick strokes with a dark sprite outline and a highlight streak.
-function limb(pts, w, color, hi) {
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.strokeStyle = OUT; ctx.lineWidth = w + 0.16; ctx.stroke();
-  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.stroke();
-  if (hi) {
-    ctx.save(); ctx.translate(-w * 0.18, -w * 0.18);
-    ctx.strokeStyle = hi; ctx.lineWidth = w * 0.3; ctx.stroke();
-    ctx.restore();
-  }
+// ---------- player sprite ----------
+// The player is drawn on his own layer with finer pixels than the arena, so the
+// face, hands and shoes can carry detail. Units are u (≈ 1 ft), origin = the ball.
+const SKIN = { base: '#6b3f24', dark: '#4a2915', hi: '#a06a42' };
+const SKIN_FAR = { base: '#54301a', dark: '#3a1f0e', hi: '#7c4f2f' };
+const WHITE = { base: '#f2f2f2', dark: '#b9b9c2', hi: '#ffffff' };
+const BRACE = { base: '#222', dark: '#0c0c0c', hi: '#555' };
+
+function capsule(a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1e-6;
+  const nx = -dy / d, ny = dx / d;
+  ctx.beginPath();
+  ctx.moveTo(a[0] + nx * a[2], a[1] + ny * a[2]); ctx.lineTo(b[0] + nx * b[2], b[1] + ny * b[2]);
+  ctx.lineTo(b[0] - nx * b[2], b[1] - ny * b[2]); ctx.lineTo(a[0] - nx * a[2], a[1] - ny * a[2]);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.arc(a[0], a[1], a[2], 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(b[0], b[1], b[2], 0, Math.PI * 2); ctx.fill();
 }
-function shape(pts, fill) {
+// A tapered limb through joints [x, y, radius]: outline, shadow tone, body tone, sheen.
+function limb(pts, tone, grow = 0.045) {
+  const pass = (color, g, ox, oy, k) => {
+    ctx.fillStyle = color;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      capsule([a[0] + ox, a[1] + oy, a[2] * k + g], [b[0] + ox, b[1] + oy, b[2] * k + g]);
+    }
+  };
+  pass(OUT, grow, 0, 0, 1);
+  pass(tone.dark, 0, 0, 0, 1);
+  pass(tone.base, 0, -0.022, -0.026, 0.78);
+  pass(tone.hi, 0, -0.05, -0.06, 0.26);
+}
+function poly(pts, fill, stroke = OUT, lw = 0.06) {
   ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.closePath();
   ctx.fillStyle = fill; ctx.fill();
-  ctx.strokeStyle = OUT; ctx.lineWidth = 0.14; ctx.lineJoin = 'round'; ctx.stroke();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.stroke(); }
 }
-function shoe(x, y, ang) {
-  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
-  ctx.fillStyle = OUT;
-  ctx.beginPath(); ctx.ellipse(0.2, 0, 0.5, 0.27, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#f4f4f4';
-  ctx.beginPath(); ctx.ellipse(0.2, 0, 0.42, 0.2, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#d62828';
-  ctx.fillRect(-0.1, -0.08, 0.35, 0.12);
+function line(pts, color, w) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+
+// Black-and-red leather high-top (no logos). Toe along +x, sole on y = 0; the
+// ankle sits at (0.22, -0.5) in shoe space.
+function shoe(ax, ay, ang) {
+  ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang); ctx.translate(-0.22, 0.5);
+  const upper = [[0.02, -0.15], [-0.03, -0.44], [0.03, -0.66], [0.33, -0.69], [0.41, -0.73],
+                 [0.47, -0.6], [0.64, -0.4], [0.86, -0.29], [1.0, -0.23], [1.05, -0.15]];
+  poly([...upper, [1.06, -0.03], [1.0, 0.01], [0.02, 0.01], [-0.03, -0.08]], OUT, OUT, 0.1);
+  poly(upper, '#171717', null);
+  const red = '#d0102b';
+  poly([[0.02, -0.15], [-0.03, -0.44], [0.2, -0.41], [0.33, -0.15]], red, null);          // heel counter
+  poly([[-0.01, -0.5], [0.03, -0.64], [0.33, -0.67], [0.39, -0.5], [0.16, -0.44]], red, null); // ankle collar
+  poly([[0.73, -0.15], [0.75, -0.31], [0.86, -0.29], [1.0, -0.23], [1.05, -0.15]], red, null); // toe cap
+  line([[0.03, -0.67], [0.33, -0.7]], '#050505', 0.05);                                   // collar lining
+  line([[0.08, -0.32], [0.45, -0.34], [0.74, -0.2]], 'rgba(255,255,255,0.2)', 0.025);       // stitching
+  line([[0.06, -0.6], [0.3, -0.63]], 'rgba(255,255,255,0.35)', 0.03);                       // leather sheen
+  line([[0.78, -0.28], [0.97, -0.22]], 'rgba(255,255,255,0.35)', 0.03);
+  for (let i = 0; i < 4; i++) {                                                             // red laces
+    const t = i / 4, x = 0.43 + t * 0.19, y = -0.67 + t * 0.26;
+    line([[x - 0.06, y - 0.02], [x + 0.06, y + 0.04]], '#ef2340', 0.05);
+  }
+  poly([[0.02, -0.15], [1.05, -0.15], [1.06, -0.07], [0.0, -0.07]], '#f4f4f4', null);       // midsole
+  poly([[0.0, -0.07], [1.06, -0.07], [1.0, 0.0], [0.02, 0.0]], '#c20f27', null);            // outsole
   ctx.restore();
 }
 
-// Player in a one-hand dunk pose, facing right. Origin = the ball, held out in front
-// of him; 1 unit = 1 u. His legs trail behind, one tucked, one kicked back.
-function drawPlayer(hx, hy, holding) {
-  const skin = '#7b4a2b', skinHi = '#b07a4f', skinBack = '#583219';
-  const red = '#e0242f', redHi = '#ff6b6b';
-  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
+function drawHead() {
+  ctx.save(); ctx.translate(-1.5, 1.3); ctx.rotate(-0.35);   // tipped back, eyes on the rim
+  ctx.beginPath();
+  ctx.moveTo(-0.12, 0.4);
+  ctx.quadraticCurveTo(-0.39, 0.26, -0.35, -0.05);   // back of head
+  ctx.quadraticCurveTo(-0.3, -0.43, 0.02, -0.43);    // crown
+  ctx.quadraticCurveTo(0.3, -0.41, 0.34, -0.14);     // forehead
+  ctx.lineTo(0.375, -0.07);                          // brow ridge
+  ctx.lineTo(0.35, -0.02);                           // eye socket
+  ctx.quadraticCurveTo(0.44, 0.05, 0.47, 0.115);     // nose
+  ctx.lineTo(0.395, 0.145);                          // under the nose
+  ctx.lineTo(0.415, 0.2);                            // upper lip
+  ctx.lineTo(0.36, 0.235);                           // open mouth
+  ctx.lineTo(0.395, 0.29);                           // lower lip
+  ctx.quadraticCurveTo(0.385, 0.37, 0.3, 0.405);     // chin
+  ctx.quadraticCurveTo(0.1, 0.47, -0.12, 0.4);       // jaw
+  ctx.closePath();
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.09; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.fillStyle = SKIN.base; ctx.fill();
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = SKIN.dark;                          // shade the back and underside
+  ctx.beginPath(); ctx.ellipse(-0.3, 0.2, 0.3, 0.4, 0.3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0.12, 0.5, 0.35, 0.12, -0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = SKIN.hi;                            // shine on the shaved head
+  ctx.beginPath(); ctx.ellipse(0.02, -0.31, 0.17, 0.065, 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#c8905f';
+  ctx.beginPath(); ctx.ellipse(0.05, -0.33, 0.06, 0.025, 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = SKIN.hi;                            // cheekbone + nose bridge
+  ctx.beginPath(); ctx.ellipse(0.25, 0.09, 0.07, 0.04, -0.4, 0, Math.PI * 2); ctx.fill();
+  line([[0.37, -0.01], [0.43, 0.08]], SKIN.hi, 0.025);
+  ctx.restore();
+  // ear
+  ctx.fillStyle = OUT; ctx.beginPath(); ctx.ellipse(-0.1, 0.05, 0.1, 0.14, 0.15, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = SKIN.base; ctx.beginPath(); ctx.ellipse(-0.1, 0.05, 0.07, 0.11, 0.15, 0, Math.PI * 2); ctx.fill();
+  line([[-0.08, -0.02], [-0.12, 0.05], [-0.09, 0.1]], SKIN.dark, 0.025);
+  // brow + eye looking up at the ball
+  line([[0.19, -0.105], [0.335, -0.09]], '#140a05', 0.04);
+  ctx.fillStyle = '#efe6dc';
+  ctx.beginPath(); ctx.ellipse(0.27, -0.025, 0.055, 0.028, -0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1a0d06';
+  ctx.beginPath(); ctx.arc(0.295, -0.035, 0.022, 0, Math.PI * 2); ctx.fill();
+  line([[0.21, -0.05], [0.325, -0.052]], '#140a05', 0.02);
+  // nostril, mustache, open mouth with the tongue out
+  ctx.fillStyle = '#2a140a';
+  ctx.beginPath(); ctx.ellipse(0.39, 0.115, 0.03, 0.018, 0.4, 0, Math.PI * 2); ctx.fill();
+  line([[0.33, 0.165], [0.405, 0.17]], '#150a05', 0.03);
+  poly([[0.36, 0.215], [0.415, 0.21], [0.395, 0.275], [0.355, 0.245]], '#3a0d0d', null);
+  ctx.fillStyle = '#d66f7a';
+  ctx.beginPath(); ctx.ellipse(0.425, 0.25, 0.05, 0.028, 0.35, 0, Math.PI * 2); ctx.fill();
+  line([[0.4, 0.245], [0.455, 0.26]], '#b0515c', 0.012);
+  line([[0.2, 0.3], [0.3, 0.37]], SKIN.dark, 0.02);                 // jaw line
+  ctx.restore();
+}
 
-  // ball arm (far side): reaches forward and up, cradling the ball
-  limb([[-1.35, 1.95], [-0.75, 1.15], [-0.22, 0.42]], 0.3, skinBack, skin);
-  // trailing leg, kicked back and up behind him
-  limb([[-2.15, 4.05], [-3.05, 4.55], [-3.7, 4.05]], 0.36, skinBack, skin);
-  limb([[-3.35, 4.35], [-3.6, 4.15]], 0.34, '#fff');
-  shoe(-3.8, 3.95, -2.4);
-  // tucked leg with knee brace
-  limb([[-1.7, 4.1], [-1.45, 5.05], [-2.15, 5.9]], 0.38, skin, skinHi);
-  limb([[-1.53, 4.85], [-1.43, 5.15]], 0.44, '#111');
-  limb([[-1.9, 5.6], [-2.08, 5.82]], 0.4, '#fff');
-  shoe(-2.25, 6.0, 2.3);
+function drawJersey() {
+  const red = '#d91a2c', redDark = '#a50d22', redHi = '#f2465a';
   // baggy shorts
-  shape([[-2.4, 3.6], [-1.35, 3.65], [-1.1, 4.7], [-1.95, 4.8], [-2.1, 4.45], [-2.75, 4.65]], red);
-  ctx.fillStyle = '#fff'; ctx.fillRect(-1.3, 3.8, 0.1, 0.85);
-  ctx.fillStyle = redHi; ctx.fillRect(-2.25, 3.8, 0.12, 0.6);
-  ctx.fillStyle = '#111'; ctx.fillRect(-2.4, 3.55, 1.05, 0.12);
-  // tank-top jersey, long torso leaning slightly back
-  shape([[-1.3, 1.9], [-1.55, 2.05], [-1.95, 2.0], [-2.15, 1.95], [-2.45, 3.6], [-1.35, 3.65]], red);
-  ctx.fillStyle = redHi; ctx.fillRect(-1.55, 2.2, 0.12, 1.3);
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 0.08;
-  ctx.beginPath(); ctx.moveTo(-1.55, 2.05); ctx.lineTo(-1.95, 2.0); ctx.stroke();
-  ctx.font = `0.62px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.lineWidth = 0.14; ctx.strokeStyle = '#fff'; ctx.strokeText('23', -1.9, 2.95);
-  ctx.fillStyle = '#111'; ctx.fillText('23', -1.9, 2.95);
-  // neck + bald head, eyes on the ball
-  limb([[-1.75, 1.95], [-1.6, 1.7]], 0.28, skin);
-  ctx.fillStyle = OUT;
-  ctx.beginPath(); ctx.ellipse(-1.5, 1.35, 0.41, 0.46, -0.3, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = skin;
-  ctx.beginPath(); ctx.ellipse(-1.5, 1.35, 0.33, 0.38, -0.3, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = skinHi;
-  ctx.beginPath(); ctx.ellipse(-1.42, 1.12, 0.14, 0.09, -0.3, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = skin;
-  ctx.beginPath(); ctx.arc(-1.78, 1.42, 0.1, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#1a0f08';
-  ctx.fillRect(-1.33, 1.2, 0.1, 0.08);
-  ctx.fillRect(-1.38, 1.52, 0.14, 0.1);
-  // near arm: stretched forward and down, wristband at the hand
-  limb([[-1.95, 2.15], [-1.15, 2.7], [-0.35, 3.05]], 0.32, skin, skinHi);
-  limb([[-0.62, 2.95], [-0.45, 3.02]], 0.38, '#fff');
+  const shorts = [[-2.45, 3.55], [-1.3, 3.6], [-1.05, 4.7], [-1.95, 4.83], [-2.1, 4.46], [-2.82, 4.68]];
+  poly(shorts, red, OUT, 0.09);
+  poly([[-2.45, 3.58], [-2.12, 3.6], [-2.12, 4.46], [-2.8, 4.66]], redDark, null);
+  line([[-1.34, 3.66], [-1.1, 4.66]], '#111', 0.11);                 // side stripe
+  line([[-1.34, 3.66], [-1.1, 4.66]], '#fff', 0.04);
+  line([[-1.08, 4.64], [-1.93, 4.77]], '#fff', 0.035);               // hem trim
+  line([[-1.75, 3.8], [-1.6, 4.4]], redDark, 0.03);                  // folds
+  line([[-2.3, 3.9], [-2.45, 4.4]], '#8a0a1c', 0.03);
+  poly([[-2.47, 3.5], [-1.29, 3.55], [-1.29, 3.68], [-2.47, 3.63]], '#111', null);
+  // tank top
+  poly([[-1.3, 1.92], [-1.5, 2.08], [-1.8, 2.1], [-2.15, 1.96], [-2.5, 3.6], [-1.3, 3.64], [-1.22, 2.8]], red, OUT, 0.09);
+  poly([[-2.15, 1.98], [-1.98, 2.1], [-2.12, 3.6], [-2.48, 3.58]], redDark, null);
+  ctx.fillStyle = redHi;
+  ctx.beginPath(); ctx.ellipse(-1.48, 2.45, 0.1, 0.28, -0.1, 0, Math.PI * 2); ctx.fill();
+  line([[-1.3, 1.93], [-1.5, 2.09], [-1.8, 2.11], [-2.13, 1.98]], '#fff', 0.06);   // neck trim
+  line([[-1.35, 3.3], [-1.9, 3.35]], redDark, 0.03);                                // waist folds
+  line([[-1.45, 3.45], [-2.1, 3.48]], redDark, 0.025);
+  ctx.font = `0.6px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 0.16; ctx.strokeStyle = '#fff'; ctx.strokeText('23', -1.78, 2.9);
+  ctx.fillStyle = '#111'; ctx.fillText('23', -1.78, 2.9);
+}
 
+// Fingers wrap from the palm around the back of the ball; angles are around the ball.
+function ballHand() {
+  limb([[-0.42, 0.5, 0.1], [-0.33, 0.35, 0.12], [-0.27, 0.27, 0.13]], SKIN_FAR, 0.035);
+  for (let i = 0; i < 4; i++) {
+    const a0 = 2.55 + i * 0.22, a1 = a0 + 0.55;
+    limb([[Math.cos(a0) * 0.44, Math.sin(a0) * 0.44, 0.045],
+          [Math.cos(a1) * 0.32, Math.sin(a1) * 0.32, 0.036]], SKIN_FAR, 0.025);
+  }
+  limb([[Math.cos(2.2) * 0.44, Math.sin(2.2) * 0.44, 0.05],
+        [Math.cos(1.75) * 0.33, Math.sin(1.75) * 0.33, 0.04]], SKIN_FAR, 0.025);   // thumb
+}
+function openHand() {
+  limb([[-0.52, 3.0, 0.1], [-0.36, 3.04, 0.12]], SKIN, 0.035);
+  const tips = [[-0.03, 2.92], [0.01, 3.02], [-0.01, 3.12], [-0.08, 3.2]];
+  tips.forEach((t, i) => limb([[-0.28, 2.98 + i * 0.05, 0.043], [t[0], t[1], 0.034]], SKIN, 0.025));
+  limb([[-0.4, 2.95, 0.045], [-0.27, 2.83, 0.036]], SKIN, 0.025);                 // thumb
+  limb([[-0.74, 2.92, 0.13], [-0.6, 2.96, 0.13]], WHITE, 0.035);                  // wristband
+}
+
+// One-hand dunk pose, facing right, legs trailing behind.
+function drawPlayer(hx, hy, holding) {
+  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
+  limb([[-1.35, 1.95, 0.18], [-1.12, 1.6, 0.175], [-0.85, 1.2, 0.12], [-0.7, 0.95, 0.13], [-0.42, 0.5, 0.09]], SKIN_FAR);        // ball arm
+  // trailing leg, kicked back
+  limb([[-2.15, 4.0, 0.25], [-3.05, 4.55, 0.17], [-3.3, 4.38, 0.18], [-3.7, 4.05, 0.11]], SKIN_FAR);
+  limb([[-3.7, 4.05, 0.13], [-3.45, 4.25, 0.14]], WHITE, 0.035);
+  shoe(-3.7, 4.05, 2.9);
+  // tucked leg with knee brace
+  limb([[-1.7, 4.05, 0.26], [-1.45, 5.05, 0.18], [-1.65, 5.3, 0.2], [-2.15, 5.85, 0.11]], SKIN);
+  limb([[-1.53, 4.88, 0.23], [-1.42, 5.17, 0.23]], BRACE, 0.035);
+  limb([[-2.15, 5.85, 0.13], [-1.95, 5.62, 0.14]], WHITE, 0.035);
+  shoe(-2.15, 5.85, 1.4);
+  drawJersey();
+  limb([[-1.78, 2.02, 0.16], [-1.6, 1.62, 0.15]], SKIN);                               // neck
+  drawHead();
+  limb([[-1.95, 2.15, 0.19], [-1.6, 2.42, 0.19], [-1.2, 2.72, 0.13], [-0.95, 2.84, 0.14], [-0.52, 3.0, 0.095]], SKIN);            // near arm
+  openHand();
   ctx.restore();
+
   if (holding) {
     star(hx - R * 0.9, hy - R * 0.2, R * (1.4 + 0.5 * Math.sin(clock * 14)), 0.9);
     drawBall(hx, hy, 0);
-    ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
-    limb([[-0.3, 0.28], [-0.05, 0.36]], 0.14, skinBack);   // fingers over the ball
-    ctx.restore();
   }
+  ctx.save(); ctx.translate(hx, hy); ctx.scale(u, u);
+  ballHand();
+  ctx.restore();
 }
 
 function drawHUD() {
@@ -473,8 +594,11 @@ function frame(now) {
   for (const b of balls) drawBall(b.x, b.y, b.rot);
   drawRimAndNet();
   drawSparks();
-  drawPlayer(mx, my, hasBall);
   drawHUD();
+  spriteCtx.clearRect(0, 0, W, H);
+  ctx = spriteCtx; PX = PS;
+  drawPlayer(mx, my, hasBall);
+  ctx = mainCtx; PX = P;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
