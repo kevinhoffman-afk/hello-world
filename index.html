@@ -585,30 +585,49 @@ function drawJersey(j, p) {
   ctx.restore();
 }
 // One baggy shorts leg hanging off the hip toward the knee, so it swings with the thigh.
-function shortsLeg(j, h, k, fill, trim) {
+// Classic side design: a diamond panel (black / red / black borders, white centre)
+// rising from a striped hem band. `far` draws it in shadow for the leg behind.
+function shortsLeg(j, h, k, far) {
   const d = [(k[0] - h[0]) / THIGH, (k[1] - h[1]) / THIGH];
   let n = [-d[1], d[0]];
   if (n[0] * j.fwd[0] + n[1] * j.fwd[1] < 0) n = [-n[0], -n[1]];            // n points forward
-  const top = add(h, [-d[0] * 0.25, -d[1] * 0.25]), hem = add(h, [d[0] * 0.72, d[1] * 0.72]);
+  const top = add(h, [-d[0] * 0.25, -d[1] * 0.25]), hem = add(h, [d[0] * 0.82, d[1] * 0.82]);
   const off = (p, w) => [p[0] + n[0] * w, p[1] + n[1] * w];
-  poly([off(top, 0.36), off(hem, 0.41), off(hem, -0.41), off(top, -0.36)], fill, OUT, 0.08);
-  line([off(mix(top, hem, 0.35), -0.1), off(mix(top, hem, 0.9), -0.02)], RED_DARK, 0.03);   // fold
-  if (trim) {
-    line([off(hem, 0.39), off(hem, -0.39)], '#fff', 0.035);
-    line([off(top, 0.33), off(hem, 0.37)], '#111', 0.11);
-    line([off(top, 0.33), off(hem, 0.37)], '#fff', 0.04);
-    // triangle panel on the side of the leg, point down
-    const c = off(mix(top, hem, 0.55), 0.12), along = (p, t) => [p[0] + d[0] * t, p[1] + d[1] * t];
-    const tri = k => [off(along(c, -0.15 * k), 0.17 * k), off(along(c, -0.15 * k), -0.17 * k), along(c, 0.2 * k)];
-    poly(tri(1), '#111', '#fff', 0.035);
-    poly(tri(0.5), RED, null);
-  }
+  const along = (p, t) => [p[0] + d[0] * t, p[1] + d[1] * t];
+  const red = far ? RED_DARK : RED, white = far ? '#c4c0c8' : '#f4f4f4', black = '#111';
+  const shape = [off(top, 0.36), off(hem, 0.41), off(hem, -0.41), off(top, -0.36)];
+  poly(shape, red, OUT, 0.08);
+
+  ctx.save();
+  ctx.beginPath(); shape.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
+  ctx.clip();
+  line([off(mix(top, hem, 0.2), -0.12), off(mix(top, hem, 0.55), -0.05)], far ? '#7d0919' : RED_DARK, 0.03); // fold
+  // diamond panel, its lower half tucked behind the hem band
+  const c = along(hem, -0.3);
+  const diamond = s => [along(c, -0.5 * s), off(c, 0.4 * s), along(c, 0.5 * s), off(c, -0.4 * s)];
+  poly(diamond(1), black, null);
+  poly(diamond(0.86), red, null);
+  poly(diamond(0.76), black, null);
+  poly(diamond(0.68), white, null);
+  // striped hem band: white, black, red, black
+  const band = (t, w, col) => line([off(along(hem, t), 0.5), off(along(hem, t), -0.5)], col, w);
+  band(-0.13, 0.09, white);
+  band(-0.075, 0.03, black);
+  band(-0.042, 0.04, red);
+  band(-0.012, 0.03, black);
+  ctx.restore();
+  ctx.strokeStyle = OUT; ctx.lineWidth = 0.08; ctx.lineJoin = 'round';
+  ctx.beginPath(); shape.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
+  ctx.stroke();
 }
 function drawShorts(j) {
   const P = j.at;
   poly([P(0.47, 0.55), P(-0.52, 0.5), P(-0.56, -0.1), P(0.0, -0.42), P(0.52, -0.1)], RED, OUT, 0.08);
-  shortsLeg(j, j.hN, j.kN, RED, true);
-  poly([P(-0.53, 0.6), P(0.49, 0.64), P(0.49, 0.49), P(-0.53, 0.45)], '#111', null);        // waistband
+  shortsLeg(j, j.hN, j.kN, false);
+  // elastic waistband with stitching
+  poly([P(-0.53, 0.62), P(0.49, 0.66), P(0.49, 0.45), P(-0.53, 0.41)], '#c8142a', OUT, 0.06);
+  line([P(-0.5, 0.56), P(0.46, 0.6)], RED_DARK, 0.018);
+  line([P(-0.5, 0.47), P(0.46, 0.51)], RED_DARK, 0.018);
 }
 
 function drawPlayer() {
@@ -618,7 +637,7 @@ function drawPlayer() {
   arm(j.sF, j.eF, j.wF, SKIN_FAR);                                               // ball arm
   if (!onBall) handOpen(j.wF, p.ff, SKIN_FAR, false);
   leg(j.hF, j.kF, j.aF, p.fshoe, SKIN_FAR);
-  shortsLeg(j, j.hF, j.kF, RED_DARK, false);
+  shortsLeg(j, j.hF, j.kF, true);
   leg(j.hN, j.kN, j.aN, p.nshoe, SKIN);
   drawJersey(j, p);
   drawShorts(j);
