@@ -138,6 +138,22 @@ let makes = 0, shots = 0, streak = 0, netSway = 0, clock = 0;
 // player: pelvis position, facing, how airborne (0 floor .. 1 dunk pose), reach, gait
 let px, py, facing = 1, air = 1, reach = 0, gait = 0, stride = 0, speed = 0, dribble = 0;
 let pose, J, feetY, ballL = [0, 0], heldBall = [0, 0], heldSpin = 0, ballTrail = [];
+// every joint follows its target through a damped spring (overlap and follow-through);
+// the cloth offset lags behind the body so the jersey and shorts billow
+let live = null, liveV = {}, accel = 0, pvy = 0, cloth = [0, 0], clothV = [0, 0];
+const STIFF = { torso: 150, head: 100, tilt: 100, twist: 130, fu: 240, ff: 200, nu: 110, nf: 80,
+                nth: 320, nsh: 280, nshoe: 300, fth: 320, fsh: 280, fshoe: 300 };
+function springPose(target, dt) {
+  if (!live) { live = { ...target }; for (const k in target) liveV[k] = 0; return live; }
+  const n = 3, h = dt / n;
+  for (let i = 0; i < n; i++) for (const k in target) {
+    const K = STIFF[k] + ((k === 'fu' || k === 'ff') ? air * 2400 : 0);   // aim stays exact in the air
+    const C = 2 * 0.7 * Math.sqrt(K);
+    liveV[k] += (K * (target[k] - live[k]) - C * liveV[k]) * h;
+    live[k] += liveV[k] * h;
+  }
+  return live;
+}
 
 layout();
 rawX = W * 0.35; rawY = H * 0.35;
@@ -180,21 +196,41 @@ function updatePlayer(dt, now) {
 
   const newX = tx - dunk.ball[0] * u * smooth(air);
   if (px === undefined) px = newX;
+  const lastSpeed = speed;
   speed += ((newX - px) / dt - speed) * Math.min(1, dt * 8);
+  accel += ((speed - lastSpeed) / dt - accel) * Math.min(1, dt * 6);
   px = newX;
   stride += (clamp01(Math.abs(speed) / (10 * u)) * (1 - air) - stride) * Math.min(1, dt * 6);
-  gait += dt * Math.abs(speed) / u * 1.7;
-  dribble += dt * (Math.PI * 2 * 1.6 + Math.abs(speed) / u * 0.6);
+  const dGait = dt * Math.abs(speed) / u * 1.7;
+  gait += dGait;
+  dribble += dt * Math.PI * 2 * 1.7 * (1 - stride) + dGait * stride;     // one bounce per stride
   if (air < 0.15 && Math.abs(speed) > 2 * u) facing = Math.sign(speed);
   if (air > 0.35) facing = 1;
 
   const ground = runPose(gait, stride, dribble, hasBall);
-  pose = air < 0.35 ? blendPose(ground, TAKEOFF, air / 0.35) : blendPose(TAKEOFF, DUNK, (air - 0.35) / 0.65);
-  applyReach(pose, reach * air);
+  ground.torso += 0.16 * Math.max(-1, Math.min(1, accel * facing / (40 * u)));   // lean into acceleration
+  ground.torso += 0.02 * (1 - stride) * Math.sin(clock * 2.4);                     // breathing
+  const target = air < 0.35 ? blendPose(ground, TAKEOFF, air / 0.35) : blendPose(TAKEOFF, DUNK, (air - 0.35) / 0.65);
+  const hang = smooth((air - 0.5) * 2);                                            // drifting in the air
+  target.nth += 0.07 * hang * Math.sin(clock * 2.2);
+  target.fth += 0.06 * hang * Math.sin(clock * 2.2 + 1.3);
+  target.nu += 0.1 * hang * Math.sin(clock * 1.7);
+  target.nf += 0.14 * hang * Math.sin(clock * 1.7 - 0.6);
+  applyReach(target, reach * air);
+  pose = springPose(target, dt);
   J = fk(pose);
   const low = footLow(J, pose);
+  const lastPy = py === undefined ? airY : py;
   py = Math.min(airY, floorY - low * u);                   // feet never go through the floor
   feetY = py + low * u;
+  pvy += ((py - lastPy) / dt - pvy) * Math.min(1, dt * 8);
+  // cloth lags behind the body: forward/back from running, up/down from jumping
+  const ct = [Math.max(-0.2, Math.min(0.2, -speed * facing / u * 0.012)),
+              Math.max(-0.2, Math.min(0.2, pvy / u * 0.012))];
+  for (let i = 0; i < 2; i++) {
+    clothV[i] += (70 * (ct[i] - cloth[i]) - 2 * 0.45 * Math.sqrt(70) * clothV[i]) * dt;
+    cloth[i] += clothV[i] * dt;
+  }
   const toW = l => [px + facing * l[0] * u, py + l[1] * u];
 
   // stretch the ball out in front as he closes in on the rim
@@ -344,9 +380,9 @@ function drawBall(x, y, rot) {
 // ---------- player sprite ----------
 // The player is drawn on his own layer with finer pixels than the arena, so the
 // face, hands and shoes can carry detail. Units are u (≈ 1 ft), origin = the ball.
-const SKIN = { base: '#6b3f24', dark: '#4a2915', hi: '#a06a42' };
-const SKIN_FAR = { base: '#54301a', dark: '#3a1f0e', hi: '#7c4f2f' };
-const WHITE = { base: '#f2f2f2', dark: '#b9b9c2', hi: '#ffffff' };
+const SKIN = { base: '#6a3d22', dark: '#452612', hi: '#98633d', spec: '#c99064' };
+const SKIN_FAR = { base: '#52301a', dark: '#351c0c', hi: '#77492b', spec: '#9a6a45' };
+const WHITE = { base: '#f2f2f2', dark: '#b9b9c2', hi: '#ffffff', spec: '#ffffff' };
 const BRACE = { base: '#222', dark: '#0c0c0c', hi: '#555' };
 
 function capsule(a, b) {
@@ -371,7 +407,8 @@ function limb(pts, tone, grow = 0.045) {
   pass(OUT, grow, 0, 0, 1);
   pass(tone.dark, 0, 0, 0, 1);
   pass(tone.base, 0, -0.022, -0.026, 0.78);
-  pass(tone.hi, 0, -0.05, -0.06, 0.26);
+  pass(tone.hi, 0, -0.05, -0.06, 0.3);
+  if (tone.spec) pass(tone.spec, 0, -0.07, -0.085, 0.1);        // arena lights overhead
 }
 function poly(pts, fill, stroke = OUT, lw = 0.06) {
   ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
@@ -435,6 +472,11 @@ function drawHead(x, y, tilt) {
   ctx.fillStyle = SKIN.dark;                          // shade the back and underside
   ctx.beginPath(); ctx.ellipse(-0.3, 0.2, 0.3, 0.4, 0.3, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.ellipse(0.12, 0.5, 0.35, 0.12, -0.1, 0, Math.PI * 2); ctx.fill();
+  const rg = ctx.createRadialGradient(0.08, -0.28, 0.02, 0.05, -0.2, 0.5);   // rounded skull
+  rg.addColorStop(0, 'rgba(190,130,85,0.55)'); rg.addColorStop(1, 'rgba(190,130,85,0)');
+  ctx.fillStyle = rg; ctx.fillRect(-0.5, -0.5, 1, 1);
+  ctx.fillStyle = 'rgba(40,18,6,0.2)';                // hollow under the cheekbone
+  ctx.beginPath(); ctx.ellipse(0.2, 0.19, 0.07, 0.035, -0.5, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = SKIN.hi;                            // shine on the shaved head
   ctx.beginPath(); ctx.ellipse(0.02, -0.31, 0.17, 0.065, 0.1, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#c8905f';
@@ -447,18 +489,30 @@ function drawHead(x, y, tilt) {
   ctx.fillStyle = OUT; ctx.beginPath(); ctx.ellipse(-0.1, 0.05, 0.1, 0.14, 0.15, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = SKIN.base; ctx.beginPath(); ctx.ellipse(-0.1, 0.05, 0.07, 0.11, 0.15, 0, Math.PI * 2); ctx.fill();
   line([[-0.08, -0.02], [-0.12, 0.05], [-0.09, 0.1]], SKIN.dark, 0.025);
-  // brow + eye looking up at the ball
-  line([[0.19, -0.105], [0.335, -0.09]], '#140a05', 0.04);
-  ctx.fillStyle = '#efe6dc';
-  ctx.beginPath(); ctx.ellipse(0.27, -0.025, 0.055, 0.028, -0.1, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#1a0d06';
-  ctx.beginPath(); ctx.arc(0.295, -0.035, 0.022, 0, Math.PI * 2); ctx.fill();
-  line([[0.21, -0.05], [0.325, -0.052]], '#140a05', 0.02);
+  ctx.fillStyle = SKIN.dark; ctx.beginPath(); ctx.arc(-0.1, 0.05, 0.03, 0, Math.PI * 2); ctx.fill();
+  // brow, eye socket shadow, eye with lids and a catchlight
+  ctx.fillStyle = 'rgba(40,18,6,0.5)';
+  ctx.beginPath(); ctx.ellipse(0.27, -0.035, 0.085, 0.05, -0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#140a05'; ctx.lineWidth = 0.045; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0.18, -0.1); ctx.quadraticCurveTo(0.27, -0.13, 0.345, -0.095); ctx.stroke();
+  ctx.fillStyle = '#ece2d6';
+  ctx.beginPath(); ctx.ellipse(0.275, -0.025, 0.058, 0.026, -0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#2a160a';
+  ctx.beginPath(); ctx.arc(0.3, -0.027, 0.024, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(0.308, -0.036, 0.008, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#140a05'; ctx.lineWidth = 0.022;
+  ctx.beginPath(); ctx.moveTo(0.215, -0.035); ctx.quadraticCurveTo(0.275, -0.062, 0.335, -0.035); ctx.stroke();
+  line([[0.23, 0.0], [0.32, 0.002]], 'rgba(40,18,6,0.6)', 0.012);
   // nostril, mustache, open mouth with the tongue out
   ctx.fillStyle = '#2a140a';
   ctx.beginPath(); ctx.ellipse(0.39, 0.115, 0.03, 0.018, 0.4, 0, Math.PI * 2); ctx.fill();
+  line([[0.35, 0.09], [0.37, 0.135], [0.4, 0.145]], SKIN.dark, 0.018);        // nostril wing
+  ctx.fillStyle = SKIN.hi; ctx.beginPath(); ctx.arc(0.44, 0.08, 0.018, 0, Math.PI * 2); ctx.fill();
   line([[0.33, 0.165], [0.405, 0.17]], '#150a05', 0.03);
+  poly([[0.35, 0.18], [0.415, 0.2], [0.36, 0.22]], '#4a2618', null);           // upper lip
   poly([[0.36, 0.215], [0.415, 0.21], [0.395, 0.275], [0.355, 0.245]], '#3a0d0d', null);
+  poly([[0.355, 0.26], [0.395, 0.275], [0.38, 0.305], [0.345, 0.29]], '#5a2e1f', null);  // lower lip
   ctx.fillStyle = '#d66f7a';
   ctx.beginPath(); ctx.ellipse(0.425, 0.25, 0.05, 0.028, 0.35, 0, Math.PI * 2); ctx.fill();
   line([[0.4, 0.245], [0.455, 0.26]], '#b0515c', 0.012);
@@ -490,27 +544,30 @@ const clamp01 = x => Math.max(0, Math.min(1, x));
 const smooth = x => { x = clamp01(x); return x * x * (3 - 2 * x); };
 
 // Ball held overhead, other arm flung back, legs split wide.
-const DUNK = { torso: -1.495, head: -1.23, tilt: -0.15, fu: -1.33, ff: -1.29, nu: 2.956, nf: 3.009,
+const DUNK = { torso: -1.495, head: -1.23, tilt: -0.15, twist: 0, fu: -1.33, ff: -1.29, nu: 2.956, nf: 3.009,
                nth: 0.172, nsh: 1.768, nshoe: 1.1, fth: 2.875, fsh: 2.953, fshoe: 2.6 };
 // Leaving the floor: front knee driving up, back leg pushing off, ball arm rising.
-const TAKEOFF = { torso: -1.55, head: -1.35, tilt: -0.1, fu: -1.1, ff: -1.2, nu: 2.3, nf: 2.6,
+const TAKEOFF = { torso: -1.55, head: -1.35, tilt: -0.1, twist: 0.3, fu: -1.1, ff: -1.2, nu: 2.3, nf: 2.6,
                   nth: 0.0, nsh: 1.6, nshoe: 1.0, fth: 1.85, fsh: 2.0, fshoe: 1.9 };
 const POSE_KEYS = Object.keys(DUNK);
 const REACH_TURN = 1.06, LEAN = 0.3;
 
-// Driving dribble (phase ph, amount k 0..1): chest over the ball, knees bent low,
-// head up; ball arm pumps the ball low at his side while the other arm stays bent
-// up and out to protect it.
+// Dribbling run (phase ph, amount k 0..1): chest up with a moderate lean, head level,
+// long stance leg and a knee drive with heel kick on the swing leg, feet rolling heel
+// to toe; the ball arm pumps the ball at his side, the free arm swings bent. `twist`
+// counter-rotates shoulders against hips with each stride.
 function runPose(ph, k, dribble, holding) {
   const D = Math.PI / 2, s = Math.sin(ph), c = Math.cos(ph);
-  const torso = -1.18 + 0.08 * k;
-  const nth = D - 0.42 - 0.55 * k * s, fth = D + 0.02 + 0.55 * k * s;
-  const nsh = nth + 0.8 + 0.9 * k * Math.max(0, c), fsh = fth + 0.8 + 0.9 * k * Math.max(0, -c);
-  const nu = 2.45 + 0.25 * k * s, nf = 1.05 + 0.2 * k * s;              // guard arm, elbow back
-  const fu = holding ? D - 0.3 : D + 0.1 - 0.75 * k * s;
-  const ff = holding ? D - 0.05 - 0.22 * Math.cos(dribble) : fu - 1.4;
-  return { torso, head: -1.42, tilt: -0.12, fu, ff, nu, nf,
-           nth, nsh, nshoe: nsh - D - 0.15, fth, fsh, fshoe: fsh - D - 0.1 };
+  const torso = -1.4 + 0.13 * k + 0.035 * k * Math.cos(2 * ph);
+  const nth = D - 0.2 - 0.62 * k * s, fth = D - 0.2 + 0.62 * k * s;
+  const swingN = Math.max(0, c), swingF = Math.max(0, -c);
+  const nsh = nth + 0.3 + 0.15 * k + 1.25 * k * swingN * swingN, fsh = fth + 0.3 + 0.15 * k + 1.25 * k * swingF * swingF;
+  const roll = (sh, stance) => (sh - D - 0.1) * (1 - 0.75 * stance) + 0.04 * stance;
+  const nu = D + 0.25 + 0.65 * k * s, nf = nu - 1.35 + 0.25 * k * s;
+  const fu = holding ? D - 0.4 + 0.07 * Math.cos(dribble) : D + 0.25 - 0.65 * k * s;
+  const ff = holding ? D - 0.08 - 0.3 * Math.cos(dribble) : fu - 1.35;
+  return { torso, head: -1.5 - 0.03 * k * Math.cos(2 * ph), tilt: -0.04, twist: k * s, fu, ff, nu, nf,
+           nth, nsh, nshoe: roll(nsh, (1 - swingN) * k), fth, fsh, fshoe: roll(fsh, (1 - swingF) * k) };
 }
 function blendPose(a, b, t) {
   const o = {};
@@ -528,10 +585,11 @@ function fk(p) {
   const up = V(p.torso, 1), fwd = [-up[1], up[0]];
   const at = (f, v) => [fwd[0] * f + up[0] * v, fwd[1] * f + up[1] * v];
   const neck = at(0, TORSO);
-  const sF = add(neck, at(0.38, 0)), sN = add(neck, at(-0.35, -0.08));
+  const tw = p.twist;                                  // shoulders turn against the hips
+  const sF = add(neck, at(0.38 + 0.06 * tw, 0)), sN = add(neck, at(-0.35 - 0.1 * tw, -0.08));
   const eF = add(sF, V(p.fu, UPPER)), wF = add(eF, V(p.ff, FORE)), ball = add(wF, V(p.ff, TO_BALL));
   const eN = add(sN, V(p.nu, UPPER)), wN = add(eN, V(p.nf, FORE));
-  const hN = at(0.25, 0), hF = at(-0.25, 0);
+  const hN = at(0.25 + 0.08 * tw, 0), hF = at(-0.25 - 0.08 * tw, 0);
   const kN = add(hN, V(p.nth, THIGH)), aN = add(kN, V(p.nsh, SHIN));
   const kF = add(hF, V(p.fth, THIGH)), aF = add(kF, V(p.fsh, SHIN));
   return { fwd, at, neck, headC: add(neck, V(p.head, NECK)), sF, eF, wF, ball, sN, eN, wN, hN, kN, aN, hF, kF, aF };
@@ -547,10 +605,13 @@ function footLow(j, p) {
 
 // ---------- player drawing ----------
 function arm(s, e, w, tone) {
-  limb([[...s, 0.18], [...mix(s, e, 0.4), 0.175], [...e, 0.12], [...mix(e, w, 0.25), 0.13], [...w, 0.09]], tone);
+  // deltoid, biceps, elbow, forearm, wrist
+  limb([[...s, 0.19], [...mix(s, e, 0.18), 0.2], [...mix(s, e, 0.5), 0.17], [...e, 0.12],
+        [...mix(e, w, 0.3), 0.14], [...w, 0.085]], tone);
 }
 function leg(h, k, a, shoeAng, tone) {
-  limb([[...h, 0.26], [...k, 0.18], [...mix(k, a, 0.25), 0.2], [...a, 0.11]], tone);
+  // quad, knee, calf, ankle
+  limb([[...h, 0.27], [...mix(h, k, 0.35), 0.255], [...k, 0.17], [...mix(k, a, 0.3), 0.21], [...a, 0.1]], tone);
   limb([[...a, 0.13], [...mix(a, k, 0.26), 0.14]], WHITE, 0.035);            // sock
   shoe(a[0], a[1], shoeAng);
 }
@@ -563,24 +624,39 @@ function handOpen(w, ang, tone, band) {
   ctx.restore();
 }
 const RED = '#d91a2c', RED_DARK = '#a50d22', RED_HI = '#f2465a';
+// Fine mesh weave, one dot per sprite pixel cell, laid over jersey and shorts.
+let MESH = null;
+function mesh(alpha) {
+  if (!MESH) {
+    const m = document.createElement('canvas'); m.width = m.height = 3;
+    const g = m.getContext('2d'); g.fillStyle = '#000'; g.fillRect(1, 1, 1, 1);
+    MESH = ctx.createPattern(m, 'repeat');
+  }
+  MESH.setTransform(new DOMMatrix([PS / u, 0, 0, PS / u, 0, 0]));
+  ctx.globalAlpha = alpha; ctx.fillStyle = MESH; ctx.fillRect(-4, -4, 8, 12); ctx.globalAlpha = 1;
+}
+
 // Tank top as one piece of fabric: curved chest and back, the near armhole cut out
 // (his side shows through it and the arm comes out of it), collar scooping under the
-// front of the neck, piping on every edge, shading and drape folds.
+// front of the neck. It billows with the cloth lag, stretches when an arm goes up,
+// and folds shift with every stride.
 function drawJersey(j, p) {
   const P = j.at, Q = (c, e) => ctx.quadraticCurveTo(...P(...c), ...P(...e));
+  const cf = cloth[0], cv = -cloth[1];                 // lag in torso space (forward, up)
+  const billow = 0.05 * stride + Math.max(0, -cf) * 0.5;
   // side of the chest seen through the armhole
   ctx.fillStyle = SKIN.dark;
   ctx.beginPath(); ctx.ellipse(...P(-0.3, 1.68), 0.3, 0.42, p.torso - Math.PI / 2, 0, Math.PI * 2); ctx.fill();
 
   const body = () => {
     ctx.beginPath(); ctx.moveTo(...P(-0.47, 0.42));
-    Q([-0.62, 1.1], [-0.56, 1.78]);                 // back
-    Q([-0.46, 1.22], [-0.27, 1.28]);                // armhole, down the back side
-    Q([-0.04, 1.36], [-0.1, 2.03]);                 // ...and up the front to the strap
-    Q([0.03, 1.8], [0.25, 1.88]);                   // collar under the front of the neck
-    ctx.lineTo(...P(0.34, 2.0));                    // far strap
-    Q([0.62, 1.92], [0.6, 1.35]);                   // far armhole
-    Q([0.64, 0.85], [0.43, 0.42]);                  // chest to waist
+    Q([-0.64 - billow + cf * 0.5, 1.05 + cv * 0.5], [-0.56, 1.78]);        // back, puffing out
+    Q([-0.46, 1.22], [-0.27, 1.28]);                                      // armhole, back side
+    Q([-0.04, 1.36], [-0.1, 2.03]);                                       // ...up to the strap
+    Q([0.03, 1.8], [0.25, 1.88]);                                         // collar
+    ctx.lineTo(...P(0.34, 2.0));                                          // far strap
+    Q([0.62, 1.92], [0.6, 1.35]);                                         // far armhole
+    Q([0.66 + Math.max(0, cf) * 0.5, 0.85 + cv * 0.5], [0.43, 0.42]);     // chest to waist
     ctx.closePath();
   };
   body();
@@ -591,21 +667,34 @@ function drawJersey(j, p) {
   ctx.strokeStyle = OUT; ctx.lineWidth = 0.07; ctx.lineJoin = 'round'; ctx.stroke();
 
   ctx.save(); body(); ctx.clip();
-  ctx.strokeStyle = 'rgba(60,0,10,0.35)'; ctx.lineCap = 'round';
-  for (const [a, c, e, w] of [                      // drape from the armpit, bunching at the tuck
-    [[-0.28, 1.25], [-0.1, 0.95], [0.12, 0.62], 0.03],
-    [[-0.4, 1.2], [-0.3, 0.9], [-0.18, 0.6], 0.025],
-    [[0.5, 0.62], [0.2, 0.7], [-0.1, 0.58], 0.025],
-    [[0.3, 0.5], [0.0, 0.58], [-0.35, 0.5], 0.02]]) {
-    ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(...P(...a)); Q(c, e); ctx.stroke();
+  const vg = ctx.createLinearGradient(...P(0, 2.0), ...P(0, 0.4));      // light from above
+  vg.addColorStop(0, 'rgba(255,200,200,0.12)'); vg.addColorStop(1, 'rgba(40,0,8,0.25)');
+  ctx.fillStyle = vg; ctx.fillRect(-4, -4, 8, 12);
+  mesh(0.13);
+  const fold = (a, c, e, w, alpha) => {
+    ctx.strokeStyle = `rgba(60,0,10,${alpha})`; ctx.lineWidth = w; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(...P(...a)); Q(c, e); ctx.stroke();
+  };
+  const sw = 0.08 * stride * Math.sin(gait);                            // folds shift with the stride
+  fold([-0.28, 1.25], [-0.1 + sw, 0.95], [0.12 + sw, 0.62], 0.03, 0.35);   // drape from the armpit
+  fold([-0.4, 1.2], [-0.3 - sw, 0.9], [-0.18, 0.6], 0.025, 0.3);
+  fold([0.5, 0.62], [0.2, 0.7 + sw], [-0.1, 0.58], 0.025, 0.35);        // bunching at the tuck
+  fold([0.3, 0.5], [0.0, 0.58], [-0.35, 0.5], 0.02, 0.3);
+  // tension folds from the raised ball arm's armpit down to the far hip
+  const raise = clamp01((Math.PI / 2 - p.fu) / Math.PI);
+  if (raise > 0.3) {
+    const a = (raise - 0.3) / 0.7 * 0.45;
+    fold([0.5, 1.55], [0.2, 1.2], [-0.35, 0.75], 0.03, a);
+    fold([0.52, 1.35], [0.25, 1.0], [-0.2, 0.62], 0.025, a * 0.8);
   }
-  ctx.strokeStyle = 'rgba(255,170,180,0.22)'; ctx.lineWidth = 0.05;   // sheen across the chest
+  fold([-0.36, 1.26], [-0.44, 0.9], [-0.4, 0.44], 0.018, 0.4);          // side seam
+  ctx.strokeStyle = 'rgba(255,170,180,0.22)'; ctx.lineWidth = 0.05;     // sheen across the chest
   ctx.beginPath(); ctx.moveTo(...P(0.5, 1.7)); Q([0.56, 1.2], [0.46, 0.8]); ctx.stroke();
   ctx.restore();
 
-  // piping: ribbed collar, both armholes
+  // piping: ribbed collar, both armholes, with a soft shadow just inside
   const pipe = (pts) => {
-    for (const [col, w] of [[OUT, 0.085], ['#fff', 0.05]]) {
+    for (const [col, w] of [['rgba(60,0,10,0.35)', 0.16], [OUT, 0.085], ['#fff', 0.05]]) {
       ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(...P(...pts[0]));
       for (let i = 1; i < pts.length; i += 2) Q(pts[i], pts[i + 1]);
@@ -616,14 +705,23 @@ function drawJersey(j, p) {
   pipe([[-0.55, 1.76], [-0.46, 1.23], [-0.27, 1.29], [-0.05, 1.37], [-0.1, 2.0]]);
   pipe([[0.34, 1.99], [0.6, 1.91], [0.59, 1.36]]);
 
-  // number: black with white and red borders
-  const n = P(0.1, 1.08);
-  ctx.save(); ctx.translate(n[0], n[1]); ctx.rotate(p.torso + Math.PI / 2); ctx.scale(facing * 0.92, 1);
+  // number: black with white and red borders, riding the fabric
+  const n = P(0.1 + cf * 0.2, 1.08);
+  ctx.save(); ctx.translate(n[0], n[1]); ctx.rotate(p.torso + Math.PI / 2 + cf * 0.15); ctx.scale(facing * 0.92, 1);
   ctx.font = `0.44px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
   ctx.lineWidth = 0.2; ctx.strokeStyle = '#e8303f'; ctx.strokeText('23', 0, 0);
   ctx.lineWidth = 0.12; ctx.strokeStyle = '#fff'; ctx.strokeText('23', 0, 0);
   ctx.fillStyle = '#111'; ctx.fillText('23', 0, 0);
   ctx.restore();
+}
+// Where the jersey is tucked in, the fabric blouses over the waistband.
+function jerseyBlouse(j) {
+  const P = j.at, lift = 0.04 * stride * Math.sin(gait * 2) + cloth[1] * 0.2;
+  ctx.beginPath(); ctx.moveTo(...P(-0.52, 0.64));
+  ctx.quadraticCurveTo(...P(0.0, 0.84 + lift), ...P(0.5, 0.68));
+  ctx.quadraticCurveTo(...P(0.02, 0.56), ...P(-0.52, 0.64));
+  ctx.fillStyle = RED; ctx.fill();
+  ctx.strokeStyle = 'rgba(60,0,10,0.55)'; ctx.lineWidth = 0.035; ctx.stroke();
 }
 // Shorts are soft fabric: each leg is a baggy curved panel hanging off the hip toward
 // the knee, so it swings with the thigh, and its hem ripples with the stride (and
@@ -639,7 +737,8 @@ function shortsLeg(j, h, k, far) {
   const rip = 0.06 * stride * Math.sin(gait * 2 + ph) + 0.04 * air * Math.sin(clock * 9 + ph);
   const tf = off(top, 0.36), tb = off(top, -0.36), hf = off(hem, 0.43), hb = off(hem, -0.43);
   const mf = off(along(mix(top, hem, 0.55), 0.02), 0.5), mb = off(along(mix(top, hem, 0.55), 0.02), -0.5);
-  const hc = off(along(hem, 0.07 + rip), rip * 1.5);                        // hem sag + ripple
+  const lagN = cloth[0] * (n[0] * j.fwd[0] + n[1] * j.fwd[1]);              // lag across the leg
+  const hc = off(along(hem, 0.07 + rip - cloth[1] * 0.4), rip * 1.5 + lagN * 0.8);  // hem sag, ripple, lag
   const path = () => {
     ctx.beginPath(); ctx.moveTo(...tf);
     ctx.quadraticCurveTo(...mf, ...hf); ctx.quadraticCurveTo(...hc, ...hb); ctx.quadraticCurveTo(...mb, ...tb);
@@ -660,6 +759,7 @@ function shortsDetail(L) {
   ctx.save(); L.path(); ctx.clip();
   line([off(top, -0.32), off(hem, -0.36)], 'rgba(70,0,12,0.28)', 0.18);              // shadow side
   line([off(top, 0.18), off(hem, 0.26)], 'rgba(255,150,160,0.18)', 0.1);             // sheen
+  mesh(0.12);
   ctx.strokeStyle = 'rgba(70,0,12,0.35)'; ctx.lineWidth = 0.025; ctx.lineCap = 'round';
   for (const w of [-0.12, 0.12]) {                                                    // soft folds
     ctx.beginPath(); ctx.moveTo(...off(along(top, 0.25), w));
@@ -720,6 +820,7 @@ function drawPlayer() {
   limb([[...j.neck, 0.16], [...mix(j.neck, j.headC, 0.6), 0.15]], SKIN);         // neck
   drawJersey(j, p);
   drawShorts(j);
+  jerseyBlouse(j);
   drawHead(j.headC[0], j.headC[1], p.tilt);
   arm(j.sN, j.eN, j.wN, SKIN);
   handOpen(j.wN, p.nf, SKIN, true);
